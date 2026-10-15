@@ -52,6 +52,12 @@ test('reasoning and interleaved text ordinals are independent', () => {
   messages = applyTextDelta(messages, 'a', 1, 'text', '前', false);
   assert.equal(messages[0].text, '前\n后'); assert.equal(messages[0].reasoning, '思考');
 });
+test('reasoning ended collapses before the final assistant answer and changes the UI key',()=>{
+ let messages=applyTextDelta([], 'a', 0, 'reasoning','思考',false);assert.equal(core.reasoningInProgress(messages[0]),true);const key=core.messageKey(messages[0]);
+ messages=applyTextDelta(messages,'a',0,'reasoning','思考',true);assert.equal(messages[0].state,'streaming');assert.equal(core.reasoningInProgress(messages[0]),false);assert.notEqual(core.messageKey(messages[0]),key);
+ messages=applyTextDelta(messages,'a',1,'reasoning','继续思考',false);assert.equal(core.reasoningInProgress(messages[0]),true);
+ messages=applyTextDelta(messages,'a',2,'text','回答',false);assert.equal(core.reasoningInProgress(messages[0]),false);
+});
 test('diff headers do not increment line numbers', () => {
   const rows = parseDiff('--- a/f\n+++ b/f\n@@ -3,2 +4,2 @@\n-old\n+new\n same');
   assert.equal(rows[3].oldLine, '3'); assert.equal(rows[4].newLine, '4');

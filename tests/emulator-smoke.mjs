@@ -20,6 +20,12 @@ function match(query) {
   return { x: Math.round((a[0] + a[2]) / 2), y: Math.round((a[1] + a[3]) / 2), item };
 }
 async function click(query) {
+  const target={连接:'menu-connections',项目:'menu-projects',审查:'menu-review',设置:'menu-settings'}[query];
+  if(target){
+    if(!layout().some(n=>n.id==='open-menu')&&layout().some(n=>n.id==='back-chat'))await click('back-chat');
+    if(layout().some(n=>n.id==='open-menu')){await click('open-menu');await click(target);return;}
+  }
+  if(query==='聊天'&&layout().some(n=>n.id==='back-chat')){await click('back-chat');return;}
   const { x, y } = match(query); command('shell', 'uitest uiInput click ' + x + ' ' + y); await pause(300);
 }
 async function input(query, text) {
@@ -49,7 +55,7 @@ if (mode === 'connect') {
   const texts = layout().map(n => n.text).filter(Boolean);
   console.log(texts.join(' | '));
 } else if (mode === 'chat') {
-  await click('Harmony Fixture'); await pause(1000);
+  await click('项目');await click('Harmony Fixture'); await pause(1000);
   await click('new-session'); await pause(1200);
   await input('chat-input', 'test question');
   await click('send-button'); await pause(3500);
@@ -190,7 +196,7 @@ else if (mode === 'https' || mode === 'tls-negative') {
 else if (mode === 'https-resume') {
   const endpoint=process.env.OPENCODE_TEST_URL;if (!endpoint?.startsWith('https://')) throw new Error('Set OPENCODE_TEST_URL');
   if (!layout().some(n=>n.id==='server-url')) await click('连接');
-  command('shell','uitest uiInput swipe 640 1000 640 2300 500');await pause(250);
+  const screen=layout()[0].bounds.match(/\d+/g).map(Number);command('shell','uitest uiInput swipe '+Math.round(screen[2]/2)+' '+Math.round(screen[3]*.35)+' '+Math.round(screen[2]/2)+' '+Math.round(screen[3]*.75)+' 500');await pause(250);
   async function savedButton(url,label) {
     const all=layout();const start=all.findIndex(n=>n.type==='Text'&&n.text===url);
     if (start<0) return false;const b=all.slice(start).find(n=>n.type==='Button'&&n.text===label);

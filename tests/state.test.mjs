@@ -18,7 +18,7 @@ const httpMock = {
     destroy() {}, on() {}, requestInStream: async (url, options) => { requests.push({ url, options }); return 200; }
   })
 };
-class StorageMock { async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} }
+class StorageMock { async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} async activeServer() { return ''; } async rememberServer() {} }
 const modules = new Map([
   ['@kit.NetworkKit', { http: httpMock }],
   ['@kit.ArkTS', { util: { TextEncoder: Encoder, TextDecoder: Decoder, Base64Helper: Base64 } }],
@@ -294,5 +294,19 @@ await test('changing session or project clears the old approval read failure',as
  await store.openSession({id:'ses_b',title:'B',model:''});assert.equal(store.permissionError,'');
  store.permissionError='old project failure';store.api={request:async()=>({}),sessions:async()=>[],models:async()=>[]};
  await store.selectProject('/repo-b');assert.equal(store.permissionError,'');assert.equal(store.interactions.length,0);
+});
+await test('history reasoning collapses when ended even while the assistant is still generating',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'opencode'},'');
+ const m=api.parseMessages({data:[{id:'a',type:'assistant',content:[{type:'reasoning',text:'thought',time:{completed:1}},{type:'text',text:'answer'}]}]})[0];
+ assert.equal(m.state,'streaming');assert.equal(core.reasoningInProgress(m),false);
+ const active=api.parseMessages({data:[{id:'b',type:'assistant',content:[{type:'reasoning',text:'working'}]}]})[0];assert.equal(core.reasoningInProgress(active),true);
+});
+await test('launch opens chat and restores only the explicitly remembered server',async()=>{
+ const store=new AppStore();const servers=[{id:'saved'},{id:'other'}];let connected='';store.storage={init:async()=>{},servers:async()=>servers,activeServer:async()=>'saved'};store.connect=async s=>{connected=s.id;};
+ assert.equal(store.pane,'chat');await store.init({});assert.equal(connected,'saved');
+});
+await test('new conversations immediately appear once in sidebar history',async()=>{
+ const store=new AppStore();store.connected='saved';store.directory='/repo';store.sessions=[{id:'ses_new',title:'stale'}];store.api={request:async()=>({data:{id:'ses_new',title:'New'}})};store.openSession=async()=>{};
+ await store.createSession();assert.equal(store.sessions.length,1);assert.equal(store.sessions[0].title,'New');
 });
 console.log(count + ' adapter/state tests passed.');

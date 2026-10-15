@@ -13,23 +13,23 @@ function layout(){cmd('shell','uitest dumpLayout -p /data/local/tmp/opencode-app
 const bounds=n=>n.bounds.match(/-?\d+/g).map(Number);const find=q=>layout().find(n=>n.id===q||n.text===q);
 async function click(q){await clickNode(find(q));}
 async function clickNode(n){assert.ok(n,'UI control missing');const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(300);}
-async function reveal(q){for(let i=0;i<14;i++){const all=layout(),h=bounds(all[0])[3],w=bounds(all[0])[2],n=all.find(n=>n.id===q||n.text===q),b=n&&bounds(n);if(n&&n.visible!=='false'&&b[1]>300&&b[3]<h-430)return;const up=n&&b[1]<300;cmd('shell','uitest uiInput swipe '+Math.round(w*.5)+' '+Math.round(h*(up?.4:.7))+' '+Math.round(w*.5)+' '+Math.round(h*(up?.7:.4))+' 450');await pause(250);}throw new Error('Control not visible: '+q);}
+async function reveal(q){for(let i=0;i<14;i++){const all=layout(),h=bounds(all[0])[3],w=bounds(all[0])[2],n=all.find(n=>n.id===q||n.text===q),b=n&&bounds(n);if(n&&n.visible!=='false'&&b[1]>300&&b[3]<h-(/server-|connect-button|dedicated-trust|allow-http/.test(q)?150:480))return;const up=n&&b[1]<300;cmd('shell','uitest uiInput swipe '+Math.round(w*.5)+' '+Math.round(h*(up?.4:.7))+' '+Math.round(w*.5)+' '+Math.round(h*(up?.7:.4))+' 450');await pause(250);}throw new Error('Control not visible: '+q);}
 async function input(q,text){assert.ok(!text.includes("'"));await reveal(q);await click(q);cmd('shell','uitest uiInput keyEvent 2072 2017');cmd('shell','uitest uiInput keyEvent 2055');cmd('shell',"uitest uiInput text '"+text+"'");await pause(300);if(layout().some(n=>n.bundleName==='com.huawei.hmos.inputmethod')){cmd('shell','uitest uiInput keyEvent Back');await pause(300);}}
 async function shot(name){cmd('shell','snapshot_display -f /data/local/tmp/opencode-approval.jpeg');cmd('file','recv','/data/local/tmp/opencode-approval.jpeg',resolve('.test/'+name+'.jpeg'));}
 const state=async()=>await(await fetch(endpoint+'/__test/state')).json();
 const control=async path=>{const r=await fetch(endpoint+'/__test/'+path,{method:'POST'});assert.equal(r.status,200);};
 const mode=process.argv[2];
 if(mode==='connect'){
- if(!find('server-url'))await click('连接');await input('server-url',endpoint);await input('server-password','local-test');
+ if(!find('server-url')){await click('open-menu');await click('menu-connections');}await input('server-url',endpoint);await input('server-password','local-test');
  await reveal('dedicated-trust');if(find('dedicated-trust').checked==='true')await click('dedicated-trust');
  await reveal('allow-http');if(find('allow-http').checked!=='true')await click('allow-http');
  await reveal('connect-button');await click('connect-button');await pause(1500);
- await click('Harmony Fixture');await pause(900);await click('new-session');await pause(1100);assert.ok(find('chat-input'));console.log('PASS native fixture session connected.');
+ await click('open-menu');await click('menu-projects');await pause(500);await click('Harmony Fixture');await pause(900);await click('new-session');await pause(1100);assert.ok(find('chat-input'));console.log('PASS native fixture session connected.');
 }else if(mode==='preview'){
  const before=await state();writeFileSync('.test/approval-fixture-baseline.json',JSON.stringify({writes:before.receipts.filter(r=>r.path.includes('/permission/')&&r.path.endsWith('/reply')).length}));await control('approval');await pause(1800);await reveal('approval-file-src/example.ets');
- assert.ok(layout().some(n=>n.text==='+const platform = "HarmonyOS NEXT";'));await click('approval-file-src/example.ets');
+ await reveal('+const platform = "HarmonyOS NEXT";');assert.ok(layout().some(n=>n.text==='+const platform = "HarmonyOS NEXT";'));await reveal('approval-file-src/example.ets');await click('approval-file-src/example.ets');
  assert.ok(!layout().some(n=>n.text==='+const platform = "HarmonyOS NEXT";'));await click('approval-file-src/example.ets');
- assert.ok(layout().some(n=>n.text==='+const platform = "HarmonyOS NEXT";'));await shot('approval-fixture-preview');console.log('PASS native pending patch, file expand and collapse.');
+ await reveal('+const platform = "HarmonyOS NEXT";');assert.ok(layout().some(n=>n.text==='+const platform = "HarmonyOS NEXT";'));await shot('approval-fixture-preview');console.log('PASS native pending patch, file expand and collapse.');
 }else if(mode==='failure'){
  await control('permission-read-failure?enabled=1');await pause(6500);await reveal('interaction-submit-per_fixture');
  assert.ok(find('interaction-card-per_fixture'));assert.equal(find('interaction-submit-per_fixture').enabled,'false');assert.equal(find('interaction-reject-per_fixture').enabled,'true');assert.ok(find('permission-sync-error'));await shot('approval-fixture-failure');console.log('PASS read failure retains card, disables approve, and permits reject.');

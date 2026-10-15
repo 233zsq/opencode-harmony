@@ -44,7 +44,7 @@ export class SseParser {
 }
 
 export interface ToolItem { id: string; name: string; status: string; input: string; output: string; }
-export interface TextPart { ordinal: number; type: string; text: string; }
+export interface TextPart { ordinal: number; type: string; text: string; ended?: boolean; }
 export interface ChatMessage {
   id: string; role: string; text: string; reasoning: string; parts: TextPart[]; tools: ToolItem[]; state: string;
 }
@@ -94,10 +94,11 @@ export function applyTextDelta(messages: ChatMessage[], id: string, ordinal: num
     index = next.length - 1;
   }
   const old = next[index];
-  const parts = old.parts.map((p: TextPart) => ({ ordinal: p.ordinal, type: p.type, text: p.text }));
+  const parts = old.parts.map((p: TextPart) => ({ ordinal: p.ordinal, type: p.type, text: p.text, ended: p.ended }));
   const position = parts.findIndex((p: TextPart) => p.ordinal === ordinal && p.type === type);
-  if (position < 0) { parts.push({ ordinal: ordinal, type: type, text: text }); }
-  else { parts[position].text = ended ? text : parts[position].text + text; }
+  if (position < 0) { parts.push({ ordinal: ordinal, type: type, text: text, ended: ended }); }
+  else { parts[position].text = ended ? text : parts[position].text + text; parts[position].ended = ended; }
+  if (type === 'text') { parts.forEach((p: TextPart) => { if (p.type === 'reasoning' && p.ordinal < ordinal) { p.ended = true; } }); }
   parts.sort((a: TextPart, b: TextPart) => a.ordinal - b.ordinal);
   next[index] = { id: old.id, role: old.role, text: parts.filter((p: TextPart) => p.type === 'text').map((p: TextPart) => p.text).join('\n'),
     reasoning: parts.filter((p: TextPart) => p.type === 'reasoning').map((p: TextPart) => p.text).join('\n'),
@@ -248,8 +249,21 @@ export function inlineMarkdown(text: string): InlinePart[] {
   return parts;
 }
 
+export function reasoningInProgress(message: ChatMessage): boolean {
+  return message.state === 'streaming' && message.parts.some((p: TextPart) => p.type === 'reasoning' && p.ended === false);
+}
+export function toolStatus(status: string): string {
+  return status === 'completed' ? '已完成' : status === 'error' || status === 'failed' ? '失败' : status === 'running' ? '运行中' : '等待中';
+}
+export function toolSummary(tool: ToolItem): string {
+  try {
+    const input = JSON.parse(tool.input) as Record<string, string>;
+    return [input['description'], input['filePath'], input['file_path'], input['path'], input['pattern'], input['command']].find((value: string) => typeof value === 'string' && value.length > 0)?.replace(/\s+/g, ' ').slice(0, 100) || '';
+  } catch (_) { return tool.input.replace(/\s+/g, ' ').slice(0, 100); }
+}
+
 export function messageKey(message: ChatMessage): string {
-  const text = message.text + '\u0000' + message.reasoning + '\u0000' + JSON.stringify(message.tools);
+  const text = message.text + '\u0000' + message.reasoning + '\u0000' + JSON.stringify(message.tools) + message.parts.map((p: TextPart) => String(p.ended)).join(',');
   let hash = 2166136261;
   for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
   return message.id + ':' + (hash >>> 0) + ':' + message.state;

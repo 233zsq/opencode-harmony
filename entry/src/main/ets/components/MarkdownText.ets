@@ -36,13 +36,13 @@ export struct MarkdownText {
             ForEach(inlineMarkdown(block.text), (part: InlinePart) => {
               Span(part.text).fontWeight(part.kind === 'bold' ? FontWeight.Bold : FontWeight.Normal)
                 .fontFamily(part.kind === 'code' ? 'monospace' : 'sans-serif')
-                .fontColor(part.kind === 'link' ? '#2C7952' : '#24392F')
+                .fontColor(part.kind === 'link' ? '#2C7952' : '#272E33')
                 .onClick(() => { if (part.kind === 'link' && part.url) { this.onOpenLink(part.url); } })
             }, (part: InlinePart) => part.id + part.text)
-          }.fontSize(block.kind === 'heading' ? 18 : 14)
+          }.fontSize(block.kind === 'heading' ? 19 : 15)
             .fontWeight(block.kind === 'heading' ? FontWeight.Bold : FontWeight.Normal)
-            .fontColor(block.kind === 'quote' ? '#65776D' : '#24392F')
-            .lineHeight(22).width('100%').copyOption(CopyOptions.InApp)
+            .fontColor(block.kind === 'quote' ? '#65776D' : '#272E33')
+            .lineHeight(26).width('100%').copyOption(CopyOptions.InApp)
         }
       }, (block: MarkdownBlock) => block.id + block.kind + block.text + (block.kind === 'table' ? JSON.stringify(block.rows) : ''))
     }.alignItems(HorizontalAlign.Start).width('100%')

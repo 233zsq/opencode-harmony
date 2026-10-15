@@ -154,7 +154,7 @@ export class Protocol {
       const m = object(v); const role = string(m['type']); const parts: TextPart[] = []; const tools: ToolItem[] = [];
       list(m['content']).forEach((content: Object, ordinal: number) => {
         const p = object(content); const type = string(p['type']);
-        if (type === 'text' || type === 'reasoning') { parts.push({ ordinal: ordinal, type: type, text: string(p['text']) }); }
+        if (type === 'text' || type === 'reasoning') { parts.push({ ordinal: ordinal, type: type, text: string(p['text']), ended: !!object(p['time'])['completed'] || !!object(m['time'])['completed'] || list(m['content']).slice(ordinal + 1).some((later: Object) => string(object(later)['type']) !== 'reasoning') }); }
         if (type === 'tool') {
           const state = object(p['state']);
           tools.push({ id: string(p['id']), name: string(p['name']), status: string(state['status']),

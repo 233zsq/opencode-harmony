@@ -18,6 +18,8 @@ export class Storage {
       return JSON.parse(await this.prefs.get('servers', '[]') as string) as ServerConfig[];
     } catch (e) { throw e as Error; }
   }
+  async activeServer(): Promise<string> { try { return await this.prefs?.get('activeServer', '') as string || ''; } catch (e) { throw e as Error; } }
+  async rememberServer(id: string): Promise<void> { try { await this.prefs?.put('activeServer', id); await this.prefs?.flush(); } catch (e) { throw e as Error; } }
   async saveServers(servers: ServerConfig[]): Promise<void> {
     try { await this.prefs?.put('servers', JSON.stringify(servers)); await this.prefs?.flush(); }
     catch (e) { throw e as Error; }

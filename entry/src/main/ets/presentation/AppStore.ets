@@ -16,7 +16,7 @@ interface PermissionReply { decision: string; }
 interface PendingSend { id: string; sessionID: string; text: string; }
 @Observed
 export class AppStore {
-  pane: string = 'connections';
+  pane: string = 'chat';
   providers: ProviderStore = new ProviderStore();
   servers: ServerConfig[] = [];
   connected: string = '';
@@ -48,7 +48,6 @@ export class AppStore {
   private tailLoaded: boolean = false;
   reviewLoaded: boolean = false;
   working: boolean = false;
-  showReasoning: boolean = true;
   draft: string = '';
   manualPath: string = '';
   serverName: string = '';
@@ -77,7 +76,10 @@ export class AppStore {
 
   async init(context: common.Context): Promise<void> {
     if (this.initialized) { return; }
-    try { await this.storage.init(context); this.servers = await this.storage.servers(); this.initialized = true; }
+    try { await this.storage.init(context); this.servers = await this.storage.servers(); this.initialized = true;
+      const last = await this.storage.activeServer();
+      const server = this.servers.find((s: ServerConfig) => s.id === last);
+      if (server) { await this.connect(server); } }
     catch (e) { this.fail(e as Error); }
   }
   private fail(error: Error): void { this.error = error.message || '操作失败，请重新连接'; }
@@ -127,7 +129,8 @@ export class AppStore {
       const projects = await api.projects();
       if (generation !== this.generation) { return; }
       this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects;
-      this.status = '已连接'; this.pane = 'projects'; this.attempts = 0; this.openStream();
+      this.storage.rememberServer(config.id).catch((e: Error) => this.fail(e));
+      this.status = '已连接'; this.pane = 'chat'; this.attempts = 0; this.openStream();
       this.pollTimer = setInterval(() => {
         if (this.active) {
           this.sync().catch((e: Error) => this.fail(e));
@@ -232,8 +235,9 @@ export class AppStore {
         { title: '新的开发会话', location: { directory: this.directory } } as CreateRequest));
       if (generation !== this.generation) { return; }
       const s = object(result['data']);
-      await this.openSession({ id: string(s['id']), title: string(s['title'], '新的开发会话'),
-        directory: this.directory, model: '', status: 'idle' });
+      const session: SessionItem = { id: string(s['id']), title: string(s['title'], '新的开发会话'), directory: this.directory, model: '', status: 'idle' };
+      this.sessions = [session].concat(this.sessions.filter((item: SessionItem) => item.id !== session.id)).slice(0, 50);
+      await this.openSession(session);
       if (generation + 1 === this.generation && preferred && this.models.some((m: ModelItem) => m.id === preferred)) { await this.chooseModel(preferred); }
     } catch (e) { this.fail(e as Error); } finally { this.busy = false; }
   }
@@ -275,6 +279,11 @@ export class AppStore {
       const detail = object(object(await api.request('/api/session/' + encodeURIComponent(id)))['data']);
       const inbox = rows(await api.request('/api/session/' + encodeURIComponent(id) + '/inbox'));
       if (generation === this.generation) {
+        const title = string(detail['title'], this.sessionTitle);
+        if (title !== this.sessionTitle) {
+          this.sessionTitle = title;
+          this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model }));
+        }
         if (active[id] !== undefined || inbox.length > 0) { this.working = true; }
         else if (detail['outcome']) { this.working = false; }
         const model = object(detail['model']);

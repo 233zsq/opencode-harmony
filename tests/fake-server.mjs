@@ -11,6 +11,7 @@ const permissions = [];
 const receipts = [];
 const prompts = new Map();
 let permissionReadFailure = false;
+let uiMessageID = '';
 let active = false;
 let sequence = 0;
 let model = { id: 'fixture-coder', providerID: 'fixture' };
@@ -72,6 +73,23 @@ const server = http.createServer(async (req, res) => {
   const path = url.pathname;
   if (path === '/__test/permission-read-failure' && req.method === 'POST') { permissionReadFailure = url.searchParams.get('enabled') === '1'; return send(res, { permissionReadFailure }); }
   if (path === '/__test/approval' && req.method === 'POST') { if (!permissions.length) permissions.push(permission()); event('permission.asked', permissions[0]); return send(res, { created: true }); }
+  if (path === '/__test/ui-phase' && req.method === 'POST') {
+    const phase=url.searchParams.get('phase');let m=messages.find(m=>m.id===uiMessageID);
+    if(phase==='thinking') {
+      if(!messages.some(m=>m.id==='msg_ui_user'))messages.push({id:'msg_ui_user',type:'user',text:'请检查这个示例文件，并说明接下来怎么改。',time:{created:Date.now()}});
+      uiMessageID='msg_ui_'+Date.now().toString(36);m={id:uiMessageID,type:'assistant',time:{created:Date.now()},content:[]};messages.push(m);
+      m.content=[{type:'reasoning',text:'正在检查示例文件与实现步骤。这是本机UI测试数据，不执行真实工具。',time:{created:Date.now()}}];delete m.time.completed;active=true;
+      event('session.reasoning.delta',{sessionID:session.id,assistantMessageID:m.id,ordinal:0,delta:m.content[0].text});
+    } else if(m && phase==='answer') {
+      m.content[0].time.completed=Date.now();event('session.reasoning.ended',{sessionID:session.id,assistantMessageID:m.id,ordinal:0,text:m.content[0].text});
+      m.content.push({type:'text',text:'## 可以开始了\n\n已检查示例文件，接下来可以完善交互。工具细节按需查看，正文保持清晰。'});
+      m.content.push({type:'tool',id:'call_'+m.id,name:'read',time:{created:Date.now()},state:{status:'running',input:{path:'src/example.ets'},content:[]}});
+      event('session.text.ended',{sessionID:session.id,assistantMessageID:m.id,ordinal:1,text:m.content[1].text});
+    } else if(m && phase==='tool-done') {
+      const t=m.content.find(c=>c.type==='tool');t.state.status='completed';t.state.content=[{type:'text',text:'UI fixture tool result: verified sample only.'}];t.time.completed=Date.now();m.time.completed=Date.now();active=false;event('session.idle',{sessionID:session.id});
+    } else return send(res,{error:'Invalid UI phase'},400);
+    return send(res,{phase,id:m.id,toolID:'call_'+m.id});
+  }
   if (path === '/__test/state') return send(res, { receipts, messages: messages.length, forms, permissions, streams: streams.size });
   if (path === '/__test/disconnect') {
     for (const stream of streams) stream.end();
