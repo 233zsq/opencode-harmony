@@ -1,0 +1,23 @@
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+# Private operation material and local verification outputs
+/.server-access/
+/.test/
+*.pem
+*.p12
+*.p7b
+*.cer
+.env
+.env.*
+server.env
+*.log
