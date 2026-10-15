@@ -6,7 +6,7 @@
 
 - DevEco Studio 26.0.0.851内置工具链完成完整ArkTS编译、HAP打包，无ArkTS编译错误或警告。模拟器构建仅提示未配置真机签名。
 - HAP成功安装并启动到Mate90Pro / HarmonyOS 7 / API26模拟器。
-- 17项核心回归与13项适配/状态回归全部通过，共30项。
+- 17项核心回归与16项适配/状态回归全部通过，共33项。
 - 核心测试覆盖SSE帧、跨字节中文/emoji、缓存上限、消息归并、结束事件替换、Diff行号、Markdown、地址与条件表单。
 - 状态测试覆盖HTTP/SSE认证一致、V2类型、pending失败保留、迟到响应隔离、同ID发送重试、事件去重与scope隔离、卡片旧引用、分页结束及活跃状态。
 - 模拟器通过真实UI完成：连接及认证、保存凭据、重新安装启动后恢复上次会话、发送消息、流式输出、Question单选/多选/文本、批准一次、模型切换、文件读取、Diff及主动断开SSE后的重连。
@@ -14,7 +14,12 @@
 - 已通过模拟器连接真实专用OpenCode v2.0.29并显示真实MiMo历史。
 - 最终安装版本通过原生输入发送唯一短语提示，真实MiMo模型返回匹配的新回复；避免将旧历史或用户提示误判为助手回复。
 - 真实MiMo的推理与正文均正常渲染；内部idle控制消息不进入聊天正文。
-- 专用服务器实例已运行，配置/数据独立，限定目录写入；原监听地址仍存在。
+- 专用服务器实例已迁入独立Linux账号及RootDirectory，原项目路径与会话历史保留。共享Nginx配置校验值、主进程与既有监听均保持不变。
+- 独立9443 HTTPS入口已部署，用户已在腾讯云放行该端口；开发电脑公网直连验收通过。
+- 10项公网入口检查通过：未认证/错误密码、可信CA与SPKI、未知CA、错误主机名、错误SPKI、Web UI关闭、超大请求、SSE和429限流。
+- 最终客户端通过公网HTTPS连接真实服务并完成唯一短语MiMo对话；关闭开发SSH隧道、清空本轮HDC映射后，使用已保存的公网凭据恢复会话并再次获得新回复。
+- 原生模拟器分别验证未知CA及正确CA下错误公钥均被拒绝；本机TLS测试服务器HTTP计数为0，校验失败前未发送HTTP请求。
+- 实际进程namespace中验证非root账号、无capabilities、SSH/共享配置/TLS密钥不可见、/usr只读、专用目录可写。
 
 ## 实现状态
 
@@ -25,11 +30,11 @@
 | M2 项目/会话/聊天 | 已实现，模拟器与真实MiMo端到端对话通过 |
 | M3 Question/审批/模型 | 已实现，本机fixture上的原生交互与服务器请求体核验通过 |
 | M4 文件/Diff/恢复 | 已实现，原生文件/Diff与断流恢复通过，关键竞态有回归 |
-| M5 交付 | API26模拟器已安装并可使用；公网HTTPS、API24设备和真机签名待完成 |
+| M5 交付 | API26模拟器已通过公网HTTPS真实对话；正式域名、API24设备和真机签名待完成 |
 
 ## 验证证据
 
-本地被忽略的.test目录包括：home.jpeg、connected.jpeg、chat.jpeg、question-answered.jpeg、review.jpeg、files.jpeg、reconnected.jpeg和real-live-chat.jpeg，以及HDC设备布局、开发进程PID与本应用测试会话标识。私有凭据另存于被忽略的.server-access，不纳入源码。
+本地被忽略的.test目录包括：home.jpeg、connected.jpeg、chat.jpeg、question-answered.jpeg、review.jpeg、files.jpeg、reconnected.jpeg和real-live-chat.jpeg，以及public-https.jpeg、public-live.jpeg、tls-negative-ca.jpeg、tls-negative-pin.jpeg和HDC设备布局、开发进程PID与本应用测试会话标识。私有凭据另存于被忽略的.server-access，不纳入源码。
 
 本机fixture只用于可控测试，不执行真实Agent。Question、审批、文件与Diff的上述UI验证来自fixture；真实MiMo验证来自独立云实例。两者分别记录，不混称为所有生产场景均已验收。
 
@@ -37,7 +42,7 @@
 
 - API24运行验证未完成；当前声明兼容24，在API26构建运行。
 - 真机签名未配置；当前HAP为模拟器unsigned产物。
-- 域名备案与独立HTTPS入口未就绪；当前真实服务通过开发电脑带保活的SSH隧道联调，关闭电脑或隧道后该开发地址不可达。
+- 正式域名等待备案；当前独立9443 HTTPS入口已可直连，临时叶证书2026-11-14到期，需要在到期前迁移正式入口或维护证书/公钥绑定。
 - DeepSeek等额外提供商需要在专用实例单独配置；客户端展示服务器实际可用目录。
 - Markdown为首版原生渲染，支持标题、段落、列表、引用、代码块、粗体、行内代码和链接标签；复杂表格、图片、可点击链接与完整CommonMark覆盖不在已验证范围。
 - 当前Git审查以工作区修改为主；会话级修改时间线、大文件与长会话性能仍需继续完善。

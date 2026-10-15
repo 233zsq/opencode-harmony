@@ -1,50 +1,58 @@
-# 专用实例与开发通道
+# 专用实例与临时 HTTPS 入口
 
-2026-10-15 已新增专用 OpenCode v2.0.29 实例。实际主机地址、API 密码与 SSH 私钥不写入此公开文档。
+2026-10-15：备案等待期间使用独立 TCP 9443 + HTTPS。实际主机地址、API 密码、SSH 私钥和 TLS 私钥不写入公开文档。
 
-## 已实施
+## 当前运行方式
 
-- 服务单位：opencode-harmony.service（user systemd）。
-- 根目录：~/opencode-harmony-service。
-- 固定二进制：bin/opencode-v2.0.29，复制后与来源二进制逐字比较。
-- 私有环境文件：server.env，权限600，密码独立随机生成。
-- HOME、XDG_CONFIG_HOME、XDG_DATA_HOME、XDG_STATE_HOME、XDG_CACHE_HOME、TMPDIR、OPENCODE_DB 分开设置。
-- 仅监听127.0.0.1:4097。
-- 独立工作区：workspaces/demo。
-- NoNewPrivileges=yes、ProtectSystem=strict、ProtectHome=read-only。
-- ReadWritePaths 仅允许本实例根目录；SSH 目录不可访问。
-- 不运行默认 opencode pair/service set；不复制其他实例的模型密钥。
+- `opencode-harmony-agent.service`：独立 Linux 账号 `oc-harmony-agent`，仅监听 `127.0.0.1:4097`。
+- `opencode-harmony-tls.service`：独立账号 `oc-harmony-tls`，独立 Nginx 进程与配置，仅监听 `0.0.0.0:9443`。
+- 没有修改或 reload 共享 Nginx；原 80/443/8443 配置、主进程及既有监听保持不变。
+- 云侧只需放行 TCP 9443。不要开放 4097；它由本机 TLS 代理访问。
 
-已核验 API /api/info 返回2.0.29，专用项目可列出、会话可创建。专用实例已启用的 MiMo 免费模型完成最小文本回复，未要求模型读取或修改业务文件。
+## Agent 隔离与数据
 
-部署前后既有监听地址保持存在；现有 OpenCode、Nginx 及其他项目没有停止、重启或修改。
+Agent 由原 user service 迁入系统 service，原 user service 已停用。迁移时先停止本应用的旧实例，再复制数据，保留原目录作为回滚快照。
 
-目录隔离及systemd挂载约束是本实例的运行边界；它与ubuntu共享账号，不代表独立Linux用户或容器级身份隔离。新增公网入口前需要再次核验隔离和访问范围。
+- 宿主机隔离根：`/var/lib/opencode-harmony-root`。
+- 隔离环境内的应用根：`/home/ubuntu/opencode-harmony-service`。
+- 宿主机实际数据：`/var/lib/opencode-harmony-root/home/ubuntu/opencode-harmony-service`。
+- 保留隔离环境内原有绝对路径，因此原工作区、项目及会话引用不变。
+- 使用 `RootDirectory` 限制文件视图，只读挂载 `/usr`、系统公开 CA；不挂载宿主机 SSH、共享项目和 TLS 密钥目录。
+- `ProtectSystem=strict`、仅专用目录可写、无 capabilities、`NoNewPrivileges`、私有临时目录和设备、非 root 账号。
+- 配置、数据库、HOME、XDG 和模型凭据均为本实例专用；没有复制其他实例的模型密钥。
 
-## 开发电脑
+这是独立账号与文件系统隔离，网络仍共享宿主机，不等同独立虚拟机。允许访问的项目必须放入本实例工作区；原服务器其他项目不会自动出现在客户端。
 
-开发隧道：
+## TLS、认证与限流
 
-    ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N -L 127.0.0.1:4211:127.0.0.1:4097 <SSH_USER>@<HOST>
+- TLS 1.2/1.3；服务器叶证书由本应用专用 CA 签发，验证 IP SAN 和有效期。
+- 专用 CA 私钥保存在开发电脑私有目录，没有上传服务器。
+- App 只包含公开 CA 和叶证书 SPKI SHA-256；在连接中显式勾选“使用专用服务器证书”。普通请求和 SSE 采用同一配置。
+- 不使用 `remoteValidation: skip`，不关闭证书校验；禁止自动 HTTP 重定向。
+- 证书或公钥校验失败停止自动重试，提示核对地址和证书配置。
+- `/api/` 全部经独立强随机 Basic 密码认证；代理与 OpenCode 均验证认证。根路径及 Web UI 返回404。
+- 每IP 10请求/秒，突发40，最多20并发连接，超限429；请求体上限2MiB。
+- SSE 关闭代理缓冲、缓存；读取超时90秒。
+- 代理配置和 TLS 密钥由 root 管理，只有代理专用组可读；Agent 看不到该目录。
+- 密码在 App 系统安全资产中保存；本机 `.server-access` 仅本人、系统和管理员可访问，不纳入Git。
 
-仅针对本机测试使用对应私钥，不将私钥加入App或Git。模拟器映射：
+临时叶证书有效至 **2026-11-14**。更换叶证书公钥需要同步更新 App 中的 SPKI；保留原公钥续签仍需保持 CA/地址校验。域名就绪后迁移至正式证书与域名入口，再关闭临时公网端口。
 
-    hdc -t 127.0.0.1:5555 rport tcp:4211 tcp:4211
+## 连接
 
-模拟器App可连接 http://127.0.0.1:4211；这个HTTP段是本机回环，跨公网部分由SSH加密。实际API凭据保存在系统安全资产中。
+App 地址填写 `https://<SERVER_IP>:9443`，用户名 `opencode`，使用本实例私有 API 密码，并勾选“使用专用服务器证书”。不勾选“允许HTTP”。浏览器默认不信任这个私有 CA 属于预期行为，App 内使用显式信任与公钥绑定。
 
-开发电脑关闭、SSH隧道退出后，这个地址不可达，服务器Agent可以继续运行。完整历史仍保留服务器。
+连接成功后可以关闭开发电脑和 SSH 隧道，App 直接访问公网服务。首次签名和真机安装仍按 DevEco 要求配置。
 
-本机私有运维材料放在 .server-access 并被 Git 忽略；.test 下记录开发进程PID和验证产物。不要将它们加入版本管理。
+服务器证书另含 loopback SAN，便于通过开发隧道测试 TLS；这不绕过 CA、有效期或公钥校验。旧 `http://127.0.0.1:4211` 仅是开发方式，不是公网地址。
 
-## 域名就绪之后
+## 验证与运维
 
-- 确认可用域名、证书签发方式和专用TLS端口。
-- 新增独立HTTPS入口，避开已有80/443/8443业务。
-- 不默认更改共享Nginx、云安全组或既有证书。
-- 验证认证、SSE心跳、代理缓冲、长连接超时及错误响应。
-- 真机通过HTTPS直接连接后，才可声明公网远程访问验收完成。
+- 普通回归：`node tests/core.test.mjs` 与 `node tests/state.test.mjs`。
+- 公网安全验证：设置 `OPENCODE_TEST_URL=https://<SERVER_IP>:9443`，运行 `node tests/public-entry.test.mjs`。读取被忽略的本机测试凭据；不会输出密码。
+- 模拟器：同一变量下运行 `node tests/emulator-smoke.mjs https`，再运行 `live-send`。测试通过真实原生输入发送唯一短语并验证真实新回复。
+- 查看本应用状态：`sudo systemctl status opencode-harmony-agent opencode-harmony-tls`。
+- `scripts/secure-public-entry.sh` 是本轮迁移脚本，不应直接覆盖已部署实例；既有目标会拒绝执行。
+- `scripts/provision-server.sh` 保留为初始开发部署记录，当前实例由上述系统 service 管理。
 
-## 仅撤销本实例
-
-需要撤销时，只停止并禁用 opencode-harmony.service，保存所需历史后处理其专用目录和unit文件。不要停止默认OpenCode服务或清理共享配置目录。
+撤销公网访问时，仅停止并禁用 `opencode-harmony-tls.service`，同时删除云侧9443入站规则。保留 Agent 与历史即可继续本地开发。若回滚旧实例，须先停止新 Agent，并明确同步迁移后的新增数据；旧快照不会自动包含新聊天。不要停止默认 OpenCode、共享 Nginx 或其他项目服务。

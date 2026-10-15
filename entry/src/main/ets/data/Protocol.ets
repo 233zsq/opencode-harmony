@@ -1,5 +1,7 @@
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { DEDICATED_CA, DEDICATED_SPKI } from './DedicatedTrust';
 import { ChatMessage, TextPart, ToolItem, SseParser, SseFrame, ServerConfig, ProjectItem, SessionItem,
   ModelItem, Interaction, FormField, Choice, FileItem, DiffItem, FieldValue, FormCondition, FieldConstraints } from '../domain/Core';
 
@@ -19,13 +21,30 @@ export class ApiError extends Error {
   constructor(code: number, message: string) { super(message); this.code = code; }
 }
 
+export function networkError(error: Error): Error {
+  const code = (error as BusinessError).code;
+  if (code === 2300060 || code === 2300077 || code === 2300058 || code === 2300090) {
+    return new ApiError(495, '服务器证书校验失败，请核对地址、专用证书选项及证书有效期');
+  }
+  return error;
+}
 export class Protocol {
   private auth: string;
   config: ServerConfig;
   constructor(config: ServerConfig, password: string) {
+    if (config.useDedicatedTrust && !config.url.startsWith('https://')) { throw new ApiError(0, '专用证书连接必须使用 HTTPS'); }
     this.config = config;
     this.auth = password ? 'Basic ' + new util.Base64Helper().encodeToStringSync(
       new util.TextEncoder().encodeInto(config.username + ':' + password)) : '';
+  }
+  private options(): http.HttpRequestOptions {
+    const options: http.HttpRequestOptions = { connectTimeout: 10000, readTimeout: 20000, maxRedirects: 0,
+      remoteValidation: 'system' };
+    if (this.config.useDedicatedTrust) {
+      options.caData = DEDICATED_CA;
+      options.certificatePinning = { publicKeyHash: DEDICATED_SPKI, hashAlgorithm: 'SHA-256' };
+    }
+    return options;
   }
   scope(directory: string): string { return 'location%5Bdirectory%5D=' + encodeURIComponent(directory); }
   async request(path: string, method: http.RequestMethod = http.RequestMethod.GET, body: Object | undefined = undefined,
@@ -35,10 +54,11 @@ export class Protocol {
     if (this.auth) { headers['Authorization'] = this.auth; }
     if (body !== undefined) { headers['Content-Type'] = 'application/json'; }
     try {
-      const result = await task.request(this.config.url + path, {
-        method: method, header: headers, extraData: body === undefined ? undefined : JSON.stringify(body),
-        expectDataType: http.HttpDataType.STRING, connectTimeout: 10000, readTimeout: 20000, maxLimit: 2097152
-      });
+      const options = this.options();
+      options.method = method; options.header = headers;
+      options.extraData = body === undefined ? undefined : JSON.stringify(body);
+      options.expectDataType = http.HttpDataType.STRING; options.maxLimit = 2097152;
+      const result = await task.request(this.config.url + path, options);
       const text = typeof result.result === 'string' ? result.result : '';
       if (result.responseCode < 200 || result.responseCode >= 300) {
         const reason = result.responseCode === 401 || result.responseCode === 403 ? '认证失败，请检查 API 账号和密码' :
@@ -50,7 +70,7 @@ export class Protocol {
       if (result.responseCode === 204 || text.trim().length === 0) { return {} as Json; }
       if (!/^[\[{]/.test(text.trim())) { throw new ApiError(0, '地址返回了网页，并非 OpenCode API。请检查地址及代理子路径'); }
       return JSON.parse(text) as Object;
-    } catch (e) { throw e as Error; } finally { task.destroy(); }
+    } catch (e) { throw networkError(e as Error); } finally { task.destroy(); }
   }
   async projects(): Promise<ProjectItem[]> {
     const response = await this.request('/api/project');
@@ -160,11 +180,10 @@ export class Protocol {
     task.on('dataEnd', () => { setTimeout(() => { end(new Error('事件流已断开，正在恢复')); }, 100); });
     const headers: Record<string, string> = { 'Accept': 'text/event-stream' };
     if (this.auth) { headers['Authorization'] = this.auth; }
-    task.requestInStream(this.config.url + '/api/event', {
-      method: http.RequestMethod.GET, header: headers, connectTimeout: 10000, readTimeout: 60000
-    }).then((code: number) => {
+    const options = this.options(); options.method = http.RequestMethod.GET; options.header = headers; options.readTimeout = 60000;
+    task.requestInStream(this.config.url + '/api/event', options).then((code: number) => {
       if (code !== 200) { end(new ApiError(code, '事件流 HTTP ' + code) as Error); }
-    }).catch((error: Error) => { end(error); });
+    }).catch((error: Error) => { end(networkError(error)); });
     return (): void => { closed = true; task.destroy(); };
   }
 }

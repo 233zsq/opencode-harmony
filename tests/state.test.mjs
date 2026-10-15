@@ -22,7 +22,7 @@ class StorageMock { async init() {} async servers() { return []; } async secret(
 const modules = new Map([
   ['@kit.NetworkKit', { http: httpMock }],
   ['@kit.ArkTS', { util: { TextEncoder: Encoder, TextDecoder: Decoder, Base64Helper: Base64 } }],
-  ['@kit.AbilityKit', {}], ['../data/Storage', { Storage: StorageMock }]
+  ['@kit.AbilityKit', {}], ['@kit.BasicServicesKit', {}], ['../data/Storage', { Storage: StorageMock }]
 ]);
 function load(file, key) {
   const exports = {};
@@ -38,6 +38,7 @@ function load(file, key) {
   return exports;
 }
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
+const trust = load('entry/src/main/ets/data/DedicatedTrust.ets', './DedicatedTrust');
 const protocol = load('entry/src/main/ets/data/Protocol.ets', '../data/Protocol');
 const { AppStore } = load('entry/src/main/ets/presentation/AppStore.ets', 'store');
 let count = 0;
@@ -153,5 +154,29 @@ await test('SSE HTTP authentication failure survives early dataEnd', async () =>
     await Promise.resolve(); await Promise.resolve();
     assert.equal(failure.code, 401);
   } finally { httpMock.createHttp = saved; }
+});
+await test('dedicated HTTPS uses the same CA, SPKI pin and validation for HTTP and SSE', async () => {
+  const api = new protocol.Protocol({ url: 'https://192.0.2.1:9443', username: 'opencode', useDedicatedTrust: true }, 'test');
+  await api.request('/api/info'); const close = api.stream(() => {}, () => {}, () => {}); close();
+  for (const request of requests.slice(-2)) {
+    assert.equal(request.options.caData, trust.DEDICATED_CA);
+    assert.equal(request.options.certificatePinning.publicKeyHash, trust.DEDICATED_SPKI);
+    assert.equal(request.options.certificatePinning.hashAlgorithm, 'SHA-256');
+    assert.equal(request.options.remoteValidation, 'system'); assert.equal(request.options.maxRedirects, 0);
+  }
+});
+await test('private CA is opt-in and cannot be used over HTTP', async () => {
+  assert.throws(() => new protocol.Protocol({ url: 'http://192.0.2.1', useDedicatedTrust: true }, 'test'), /HTTPS/);
+  const api = new protocol.Protocol({ url: 'https://example.com', username: 'opencode' }, 'test');
+  await api.request('/api/info');
+  assert.equal(requests.at(-1).options.caData, undefined); assert.equal(requests.at(-1).options.certificatePinning, undefined);
+  assert.equal(requests.at(-1).options.maxRedirects, 0);
+});
+await test('certificate validation errors stop SSE retries and stay stopped on foreground', async () => {
+  const store=new AppStore();let end,closed=0,opened=0;
+  store.api={stream: (frame,data,done)=>{end=done;opened++;return ()=>{closed++;};}};
+  store.openStream();end(protocol.networkError(Object.assign(new Error('raw'),{code:2300060})));
+  assert.equal(store.status,'证书校验失败');assert.equal(store.retryTimer,-1);assert.equal(closed,1);
+  store.setActive(true);assert.equal(opened,1);
 });
 console.log(count + ' adapter/state tests passed.');

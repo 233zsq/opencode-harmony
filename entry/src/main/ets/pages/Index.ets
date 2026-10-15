@@ -77,6 +77,12 @@ struct Index {
               .onChange((value: boolean) => { this.store.allowHttp = value; })
             Text('允许 HTTP（仅可信局域网或本地隧道）').fontSize(11).fontColor('#7A8075').layoutWeight(1)
           }.width('100%')
+          Row({ space: 8 }) {
+            Checkbox({ name: 'dedicated-trust' }).id('dedicated-trust').select(this.store.useDedicatedTrust)
+              .selectedColor('#215D43').width(20).height(20)
+              .onChange((value: boolean) => { this.store.useDedicatedTrust = value; })
+            Text('使用专用服务器证书（IP 临时入口）').fontSize(11).fontColor('#7A8075').layoutWeight(1)
+          }.width('100%')
           Button(this.store.busy ? '正在连接…' : '保存并连接', { type: ButtonType.Normal }).id('connect-button')
             .width('100%').height(46).borderRadius(11).backgroundColor('#215D43').fontColor(Color.White)
             .enabled(!this.store.busy).onClick(() => { this.store.addServer(); })

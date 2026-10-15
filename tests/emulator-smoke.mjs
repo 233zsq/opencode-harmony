@@ -148,3 +148,59 @@ else if (mode === 'real-resume') {
   if (!found) throw new Error('Native live reply not yet visible');
   console.log('Native UI sent prompt and received real MiMo response.'); await screenshot('real-live-chat');
 }
+
+else if (mode === 'https' || mode === 'tls-negative') {
+  const endpoint = process.env.OPENCODE_TEST_URL;
+  if (!endpoint?.startsWith('https://')) throw new Error('Set OPENCODE_TEST_URL');
+  const privateEnv = readFileSync(resolve(root, '.server-access/server.env'), 'utf8');
+  const password = mode === 'tls-negative' ? 'test-only-invalid' : privateEnv.split(/\r?\n/).find(line => line.startsWith('OPENCODE_PASSWORD=')).slice(18);
+  if (!layout().some(n => n.id === 'server-url')) await click('连接');
+  async function reveal(id) {
+    for (let i=0;i<8;i++) {
+      const n=layout().find(n=>n.id===id);
+      if (n) { const b=n.bounds.match(/-?\d+/g).map(Number); if (n.visible!=='false' && b[1]>190 && b[3]<2630) return;
+        if (b[1]<190) { command('shell','uitest uiInput swipe 640 1100 640 2250 500'); await pause(200); continue; } }
+      command('shell','uitest uiInput swipe 640 2250 640 1100 500'); await pause(200);
+    }
+    throw new Error('Control not visible: '+id);
+  }
+  await reveal('server-url'); await input('server-url',endpoint);
+  await reveal('server-password');
+  try { await input('server-password',password); } catch { throw new Error('Private credential entry failed; details suppressed.'); }
+  await reveal('dedicated-trust');
+  const trust = mode !== 'tls-negative' || process.env.OPENCODE_EXPECT_TRUST !== 'false';
+  if ((match('dedicated-trust').item.checked === 'true') !== trust) await click('dedicated-trust');
+  await reveal('connect-button'); await click('connect-button'); await pause(2300);
+  if (mode === 'tls-negative') {
+    if (!layout().some(n => (n.text || '').includes('服务器证书校验失败'))) throw new Error('Native invalid certificate was not rejected');
+    if (JSON.parse(readFileSync(resolve(dir,'wrong-tls-receipts.json'),'utf8')).reached !== 0) throw new Error('Invalid TLS reached HTTP');
+    console.log('Native TLS rejected invalid certificate before sending an HTTP request.'); await screenshot('tls-negative-'+(trust?'pin':'ca'));
+    command('shell','uitest uiInput swipe 640 1000 640 2300 500'); await pause(300);
+    const all=layout();const start=all.findIndex(n=>n.text===endpoint);const button=all.slice(start).find(n=>n.type==='Button'&&n.text==='移除');
+    if (start<0||!button) throw new Error('Test profile cleanup control missing');
+    const b=button.bounds.match(/-?\d+/g).map(Number);command('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(300);
+    process.exit(0);
+  }
+  if (layout().some(n=>n.text==='demo')) { await click('demo'); await pause(700); }
+  if (layout().some(n=>n.text==='鸿蒙客户端真实接口联调')) { await click('鸿蒙客户端真实接口联调'); await pause(1300); }
+  if (!layout().some(n=>n.id==='chat-input')) throw new Error('Native public HTTPS connection failed');
+  console.log('Native app connected using dedicated CA and SPKI to HTTPS.'); await screenshot('public-https');
+}
+
+else if (mode === 'https-resume') {
+  const endpoint=process.env.OPENCODE_TEST_URL;if (!endpoint?.startsWith('https://')) throw new Error('Set OPENCODE_TEST_URL');
+  if (!layout().some(n=>n.id==='server-url')) await click('连接');
+  command('shell','uitest uiInput swipe 640 1000 640 2300 500');await pause(250);
+  async function savedButton(url,label) {
+    const all=layout();const start=all.findIndex(n=>n.type==='Text'&&n.text===url);
+    if (start<0) return false;const b=all.slice(start).find(n=>n.type==='Button'&&n.text===label);
+    if (!b) throw new Error('Saved profile control missing');const r=b.bounds.match(/-?\d+/g).map(Number);
+    command('shell','uitest uiInput click '+Math.round((r[0]+r[2])/2)+' '+Math.round((r[1]+r[3])/2));await pause(500);return true;
+  }
+  await savedButton('http://127.0.0.1:4211','移除');
+  if (!await savedButton(endpoint,'连接')) throw new Error('Saved HTTPS profile missing');await pause(2000);
+  if (layout().some(n=>n.text==='demo')) { await click('demo');await pause(800); }
+  if (layout().some(n=>n.text==='鸿蒙客户端真实接口联调')) { await click('鸿蒙客户端真实接口联调');await pause(1200); }
+  if (!layout().some(n=>n.id==='chat-input')) throw new Error('HTTPS restoration failed');
+  console.log('Saved HTTPS credentials restored; native chat ready.');await screenshot('public-https-restored');
+}

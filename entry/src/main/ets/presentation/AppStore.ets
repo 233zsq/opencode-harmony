@@ -47,6 +47,7 @@ export class AppStore {
   serverUser: string = 'opencode';
   serverPassword: string = '';
   allowHttp: boolean = false;
+  useDedicatedTrust: boolean = false;
   reviewTab: string = 'diff';
   pendingSend: PendingSend | undefined = undefined;
   private storage: Storage = new Storage();
@@ -79,9 +80,10 @@ export class AppStore {
     this.error = '';
     try {
       const url = normalizeUrl(this.serverUrl, this.allowHttp);
+      if (this.useDedicatedTrust && !url.startsWith('https://')) { throw new Error('专用证书连接必须使用 HTTPS'); }
       const id = 'srv_' + Date.now().toString(36);
       const config: ServerConfig = { id: id, name: this.serverName.trim() || 'OpenCode', url: url,
-        username: this.serverUser.trim() || 'opencode', allowHttp: this.allowHttp };
+        username: this.serverUser.trim() || 'opencode', allowHttp: this.allowHttp, useDedicatedTrust: this.useDedicatedTrust };
       await this.storage.saveSecret(id, this.serverPassword);
       const servers = this.servers.concat([config]);
       await this.storage.saveServers(servers); this.servers = servers; this.serverPassword = '';
@@ -148,15 +150,15 @@ export class AppStore {
     } else if (this.api) { this.openStream(); this.queueSync(); }
   }
   private openStream(): void {
-    if (!this.api || !this.active || this.status === '认证失败') { return; }
+    if (!this.api || !this.active || this.status === '认证失败' || this.status === '证书校验失败') { return; }
     if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); this.retryTimer = -1; }
     this.streamClose?.(); const generation = this.generation; this.lastData = Date.now();
     this.streamClose = this.api.stream((frame: SseFrame) => {
       if (generation === this.generation && this.active) { this.onFrame(frame); }
     }, () => { if (generation === this.generation) { this.lastData = Date.now(); } }, (error: Error) => {
       if (generation !== this.generation || !this.active) { return; }
-      if (error instanceof ApiError && (error.code === 401 || error.code === 403)) {
-        this.status = '认证失败'; this.error = error.message; this.stopNetwork(); return;
+      if (error instanceof ApiError && (error.code === 401 || error.code === 403 || error.code === 495)) {
+        this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.error = error.message; this.stopNetwork(); return;
       }
       this.status = '重新连接中'; this.attempts++;
       if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); }
@@ -262,8 +264,8 @@ export class AppStore {
     } catch (e) {
       if (generation === this.generation) {
         this.fail(e as Error);
-        if (e instanceof ApiError && ((e as ApiError).code === 401 || (e as ApiError).code === 403)) {
-          this.status = '认证失败'; this.stopNetwork();
+        if (e instanceof ApiError && ((e as ApiError).code === 401 || (e as ApiError).code === 403 || (e as ApiError).code === 495)) {
+          this.status = (e as ApiError).code === 495 ? '证书校验失败' : '认证失败'; this.stopNetwork();
         }
       }
     } finally {

@@ -59,7 +59,7 @@ export interface Interaction {
   id: string; sessionID: string; kind: string; title: string; detail: string;
   fields: FormField[]; state: string;
 }
-export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; }
+export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; useDedicatedTrust?: boolean; }
 export interface ProjectItem { id: string; name: string; directory: string; }
 export interface SessionItem { id: string; title: string; directory: string; status: string; model: string; }
 export interface ModelItem { id: string; label: string; }

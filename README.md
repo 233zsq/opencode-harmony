@@ -60,7 +60,7 @@ App 地址填写 http://127.0.0.1:4210，账号 opencode，测试密码 local-te
 
 生产使用经验证的 HTTPS URL及 OpenCode API 凭据。SSH 账号和 API 账号不是同一认证体系；v2.0.29 的 Basic 用户名是 opencode。
 
-备案期间可经开发电脑的 SSH 本地转发与 HDC rport 联调；这条通道依赖开发电脑，不等于手机已经拥有公网访问入口。独立实例的目录和运维边界见 [SERVER.md](docs/SERVER.md)。
+备案期间已提供独立9443 HTTPS入口，使用专用CA及服务器公钥绑定。App中填写HTTPS地址，勾选“使用专用服务器证书”，无需保持电脑或SSH隧道在线。独立账号、受限文件系统、证书期限及运维边界见 [SERVER.md](docs/SERVER.md)。
 
 scripts/provision-server.sh 是供核验后使用的独立实例部署脚本。它拒绝覆盖已有单位或抢占端口；不会运行修改默认后台服务的 opencode service set。
 
