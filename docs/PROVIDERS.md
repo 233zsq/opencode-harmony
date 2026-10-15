@@ -131,3 +131,9 @@ global 配置目录为本实例 XDG config 的 opencode 子目录，候选文件
 入口由 server/mobile_settings.py 和 opencode-harmony-settings.service 提供，仅监听127.0.0.1:4098，经现有独立9443 TLS代理及同一认证访问 /client-settings/providers。GET仅返回脱敏摘要。修改前查询运行中任务及待交互，存在时返回409；这是单用户实例的操作检查，并非与其他客户端新建任务之间的跨服务事务锁。
 
 DeepSeek付费凭据和第三方账号实际登录仍需使用者自行提供并完成。环境变量及 command 认证只展示为服务器管理项；需要服务器 localhost 回调的 chatgpt-browser 禁用，改用设备码入口。
+
+## 本轮 API24 真机证据
+
+原生保存两组明确无效的临时Key、改名、切换及删除均通过，逐步核对安全connections列表，测试凭据已清理。API24不导出SDK26新增的PATCH枚举，改用文字PATCH方法，在实际设备改名成功。
+
+自定义渠道创建、编辑保留密钥、模型目录刷新及删除均通过。经使用者授权，在全新且禁止工具的会话仅发送指定测试提示；免费MiMo入口拒绝自定义兼容渠道接入，客户端显示真实模型错误。内置OpenCode免费MiMo的对话此前已通过。兼容渠道成功对话需使用者提供允许该用法的有效第三方Key。

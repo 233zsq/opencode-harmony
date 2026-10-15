@@ -18,7 +18,7 @@
 
 已在 API26 模拟器和 API24 Pad 构建、安装并运行，Pad 使用本机 DevEco 调试签名及 Wi-Fi 调试。真实 MiMo 对话、Question、拒绝与批准文件修改、只读 Diff 和应用重开恢复均有设备验证；另有59项回归测试。详细证据与限制见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
-独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
+独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
 ## 开发环境
 
