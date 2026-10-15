@@ -70,6 +70,31 @@ export interface SessionItem { id: string; title: string; directory: string; sta
 export interface ModelItem { id: string; label: string; }
 export interface FileItem { name: string; path: string; directory: boolean; }
 export interface DiffItem { path: string; patch: string; }
+export interface TimelineEntry { id: string; type: string; text: string; created: number; outcome: string; }
+export interface TurnItem { id: string; title: string; created: number; prompts: number; state: string; partial: boolean; }
+// Keep server idle boundaries: prompts sent while a task runs belong to that task.
+export function groupTurns(entries: TimelineEntry[], hasEarlier: boolean): TurnItem[] {
+  const turns: TurnItem[] = []; let current: TurnItem | undefined = undefined; let boundary = !hasEarlier;
+  entries.forEach((entry: TimelineEntry) => {
+    if (entry.type === 'idle' || entry.type === 'location-switched') {
+      if (current) { current.state = entry.outcome === 'failed' ? 'failed' : 'completed'; }
+      current = undefined; boundary = true;
+    } else if (entry.type === 'user') {
+      if (!current) {
+        current = { id: entry.id, title: entry.text.slice(0, 100) || '任务消息', created: entry.created,
+          prompts: 1, state: 'running', partial: !boundary };
+        turns.push(current);
+      } else { current.prompts++; }
+    }
+  });
+  return turns.reverse();
+}
+export function diffKey(diff: DiffItem): string {
+  let hash = 2166136261;
+  for (let i = 0; i < diff.patch.length; i++) { hash = Math.imul(hash ^ diff.patch.charCodeAt(i), 16777619); }
+  return diff.path + ':' + diff.patch.length + ':' + (hash >>> 0);
+}
+
 
 export function mergeMessages(previous: ChatMessage[], incoming: ChatMessage[], older: boolean = false): ChatMessage[] {
   const map = new Map<string, ChatMessage>();

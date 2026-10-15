@@ -3,7 +3,7 @@ import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { DEDICATED_CA, DEDICATED_SPKI } from './DedicatedTrust';
 import { ChatMessage, TextPart, ToolItem, SseParser, SseFrame, ServerConfig, ProjectItem, SessionItem,
-  ModelItem, Interaction, FormField, Choice, FileItem, DiffItem, FieldValue, FormCondition, FieldConstraints, ApprovalPreview, ApprovalFile, previewText } from '../domain/Core';
+  TimelineEntry, ModelItem, Interaction, FormField, Choice, FileItem, DiffItem, FieldValue, FormCondition, FieldConstraints, ApprovalPreview, ApprovalFile, previewText } from '../domain/Core';
 
 export type Json = Record<string, Object>;
 export function object(value: Object | undefined | null): Json { return value ? value as Json : {}; }
@@ -169,6 +169,20 @@ export class Protocol {
         reasoning: parts.filter((p: TextPart) => p.type === 'reasoning').map((p: TextPart) => p.text).join('\n'),
         parts: parts, tools: tools, state: m['finish'] === 'error' ? 'failed' : object(m['time'])['completed'] ? 'completed' : 'streaming' };
     }).filter((m: ChatMessage) => m.id.length > 0 && m.role !== 'idle');
+  }
+  parseTimeline(response: Object): TimelineEntry[] {
+    return rows(response).slice().reverse().map((value: Object): TimelineEntry => {
+      const entry = object(value);
+      return { id: string(entry['id']), type: string(entry['type']),
+        text: string(entry['text'], string(object(entry['payload'])['text'])),
+        created: Number(object(entry['time'])['created']) || 0, outcome: string(entry['outcome']) };
+    }).filter((entry: TimelineEntry) => !!entry.id);
+  }
+  async turnDiff(id: string, directory: string, from: string): Promise<DiffItem[]> {
+    return rows(await this.request('/api/session/' + encodeURIComponent(id) + '/diff?' + this.scope(directory) +
+      '&from=' + encodeURIComponent(from) + '&context=3')).map((value: Object): DiffItem => {
+      const diff = object(value); return { path: string(diff['file']), patch: string(diff['patch']) };
+    });
   }
   async interactions(sessionID: string, kind: string, directory: string = ''): Promise<Interaction[]> {
     const path = '/api/session/' + encodeURIComponent(sessionID) + (kind === 'form' ? '/form' : '/permission');

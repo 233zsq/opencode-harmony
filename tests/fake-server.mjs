@@ -65,6 +65,7 @@ async function runPrompt(text) {
     event('permission.asked', permissions[0]);
   }
   active = false;
+  messages.push({id:'idle_'+id,type:'idle',outcome:'succeeded',time:{created:Date.now()}});
   event('session.idle', { sessionID: session.id });
 }
 
@@ -89,6 +90,12 @@ const server = http.createServer(async (req, res) => {
       const t=m.content.find(c=>c.type==='tool');t.state.status='completed';t.state.content=[{type:'text',text:'UI fixture tool result: verified sample only.'}];t.time.completed=Date.now();m.time.completed=Date.now();active=false;event('session.idle',{sessionID:session.id});
     } else return send(res,{error:'Invalid UI phase'},400);
     return send(res,{phase,id:m.id,toolID:'call_'+m.id});
+  }
+  if (path === '/__test/timeline' && req.method === 'POST') {
+    messages.splice(0);messages.push({id:'turn_a',type:'user',text:'第一轮：示例文件改成 A',time:{created:Date.now()-60000}},
+      {id:'idle_a',type:'idle',outcome:'succeeded'}, {id:'turn_b',type:'user',text:'第二轮：同一文件改成 B',time:{created:Date.now()}},
+      {id:'steer_b',type:'user',text:'追加说明仍属第二轮'}, {id:'idle_b',type:'idle',outcome:'succeeded'});
+    return send(res,{ready:true});
   }
   if (path === '/__test/state') return send(res, { receipts, messages: messages.length, forms, permissions, streams: streams.size });
   if (path === '/__test/disconnect') {
@@ -141,6 +148,9 @@ const server = http.createServer(async (req, res) => {
     event('permission.replied', { requestID: 'per_fixture', sessionID: session.id, reply: input.decision });
     return send(res, {}, 204);
   }
+  if (path === '/api/session/'+session.id+'/diff') return send(res,{data:[{file:'src/example.ets',patch:'--- a/src/example.ets\n+++ b/src/example.ets\n@@ -1 +1 @@\n-before\n+'+(url.searchParams.get('from')==='turn_a'?'TASK_A_ONLY':'TASK_B_ONLY')+'\n'}]});
+  if (path === '/api/integration') return send(res,{data:[{id:'opencode',name:'OpenCode',methods:[{id:'key',type:'key',label:'API Key'}],connections:[]},{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',label:'API Key'}],connections:[]}]});
+  if (path === '/client-settings/providers') return send(res,{data:[]});
   if (path === '/api/vcs/diff') return send(res, { location: { directory }, data: [{
     file: 'src/example.ets', patch: 'diff --git a/src/example.ets b/src/example.ets\n--- a/src/example.ets\n+++ b/src/example.ets\n@@ -1,2 +1,2 @@\n-const platform = "Android";\n+const platform = "HarmonyOS";\n // local fixture\n', additions: 1, deletions: 1, status: 'modified'
   }] });
@@ -153,7 +163,7 @@ const server = http.createServer(async (req, res) => {
     res.write('data: ' + JSON.stringify({ id: 'connected_' + randomUUID(), type: 'server.connected', data: {} }) + '\n\n');
     streams.add(res);
     const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 5000);
-    req.on('close', () => { streams.delete(res); clearInterval(heartbeat); });
+    res.on('close', () => { streams.delete(res); clearInterval(heartbeat); });
     return;
   }
   if (path === '/api/session/' + session.id) return send(res, { data: session });

@@ -1,6 +1,6 @@
 import { http } from '@kit.NetworkKit';
 import { Protocol, ApiError, object, list, string, rows, parseFields, Json } from '../data/Protocol';
-import { FormField, FieldValue, buildFormAnswer, updateFieldValue } from '../domain/Core';
+import { ModelItem, FormField, FieldValue, buildFormAnswer, updateFieldValue } from '../domain/Core';
 
 export interface Account { id: string; label: string; type: string; method: string; active: boolean; }
 export interface AuthMethod { id: string; type: string; label: string; fields: FormField[]; supported: boolean; }
@@ -14,6 +14,11 @@ interface RenameRequest { label: string; }
 
 @Observed
 export class ProviderStore {
+  section: string = 'native';
+  catalog: ModelItem[] = [];
+  catalogError: string = '';
+  modelSearch: string = '';
+  editingID: string = '';
   entries: Integration[] = [];
   custom: CustomProvider[] = [];
   customAvailable: boolean = false;
@@ -47,6 +52,7 @@ export class ProviderStore {
 
   attach(api: Protocol | undefined, directory: string, changed: () => Promise<void>): void {
     this.cancelSilently(); this.generation++; this.api = api; this.directory = directory; this.changed = changed;
+    this.catalog = []; this.catalogError = ''; this.modelSearch = ''; this.newCustom(); this.search = ''; this.section = 'native';
     this.entries = []; this.custom = []; this.selected = ''; this.methodID = ''; this.methodType = ''; this.fields = []; this.key = ''; this.customKey = '';
     this.error = ''; this.notice = ''; this.customAvailable = false; this.busy = false;
   }
@@ -63,6 +69,31 @@ export class ProviderStore {
     if (this.selected && !term) { return this.entries.filter((p: Integration) => p.id === this.selected); }
     return this.entries.filter((p: Integration) => term ? (p.id + ' ' + p.name).toLowerCase().includes(term) :
       p.accounts.length > 0 || /deepseek|mimo|xiaomi|openai|opencode|anthropic|openrouter|google|silicon|volc|kimi|moonshot|zhipu|minimax|alibaba/i.test(p.id + p.name)).slice(0, 40);
+  }
+  quickSelect(term: string): void {
+    this.section = 'native'; this.search = '';
+    const entry = this.entries.find((item: Integration) => item.id === term) || this.entries.find((item: Integration) => (item.id + ' ' + item.name).toLowerCase().includes(term));
+    if (entry) { this.select(entry); const method = entry.methods.find((item: AuthMethod) => item.type === 'key' && item.supported); if (method) { this.choose(method); } }
+    else { this.search = term; this.notice = '请从服务器提供的入口中选择；也可使用自定义兼容渠道。'; }
+  }
+  modelMatches(): ModelItem[] { const term = this.modelSearch.trim().toLowerCase(); return this.catalog.filter((item: ModelItem) => (item.id + ' ' + item.label).toLowerCase().includes(term)); }
+  visibleModels(): ModelItem[] { return this.modelMatches().slice(0, 60); }
+  newCustom(): void {
+    this.editingID = ''; this.customID = ''; this.customName = ''; this.customURL = ''; this.customModels = ''; this.customKey = ''; this.error = ''; this.notice = '';
+  }
+  customValidation(): string {
+    if (!/^mobile-[a-z0-9][a-z0-9-]{0,47}$/.test(this.customID.trim())) { return '渠道 ID 请使用 mobile- 开头的小写字母、数字或连字符'; }
+    if (!this.editingID && this.custom.some((item: CustomProvider) => item.id === this.customID.trim())) { return '此 ID 已存在，请选择已有渠道编辑，或使用新 ID'; }
+    const name = this.customName.trim(); if (!name || name.length > 128 || /[\u0000-\u001f]/.test(name)) { return '请填写渠道名称，最多 128 个字'; }
+    const url = this.customURL.trim();
+    if (url.length > 2048 || !/^https:\/\/[^/?#@\s]+(?:\/[^?#\s]*)?$/.test(url) || /\/(?:chat\/completions|responses|messages)\/?$/.test(url)) {
+      return '请填写 HTTPS Base URL，例如 https://api.example.com/v1，不要填写完整请求接口或认证参数';
+    }
+    const models = this.customModels.split(/[\n,，]/).map((value: string) => value.trim()).filter((value: string) => !!value);
+    if (!models.length || models.length > 100 || models.some((value: string) => !/^[A-Za-z0-9_./:~+-]{1,160}$/.test(value))) { return '请填写准确模型 ID，每行一个，最多 100 个'; }
+    if (new Set<string>(models).size !== models.length) { return '模型 ID 不能重复'; }
+    if (this.customKey.length > 4096 || /[\u0000-\u001f]/.test(this.customKey) || /\{(?:env|file):/i.test(name + url + this.customKey)) { return '名称、地址和密钥需为普通文本，不能包含控制字符或配置插值'; }
+    return '';
   }
   current(): Integration | undefined { return this.entries.find((p: Integration) => p.id === this.selected); }
   async load(): Promise<void> {
@@ -90,6 +121,11 @@ export class ProviderStore {
             fields: parseFields(m['form']), supported: ['key', 'oauth', 'external'].indexOf(type) >= 0 && id !== 'chatgpt-browser' };
         }) };
     });
+    try {
+      const models = await this.api.models(this.directory);
+      if (generation !== this.generation) { return; }
+      this.catalog = models; this.catalogError = '';
+    } catch (_) { if (generation === this.generation) { this.catalogError = '模型目录暂时读取失败，保留上次目录；请刷新后再选择。'; } }
     try {
       const response = await this.api.request('/client-settings/providers');
       if (generation !== this.generation) { return; }
@@ -217,13 +253,14 @@ export class ProviderStore {
     finally { if (generation === this.generation) { this.busy = false; } }
   }
   editCustom(provider: CustomProvider): void {
-    this.customID = provider.id; this.customName = provider.name; this.customURL = provider.baseURL;
+    this.section = 'custom'; this.editingID = provider.id; this.error = ''; this.customID = provider.id; this.customName = provider.name; this.customURL = provider.baseURL;
     this.customModels = provider.models.join('\n'); this.customKey = ''; this.notice = '密钥留空表示保留原密钥，不会回显已有密钥。';
   }
   async saveCustom(remove: boolean = false): Promise<void> {
     if (!this.api || this.busy || !this.customAvailable) { return; }
     const id = this.customID.trim();
     if (!/^mobile-[a-z0-9][a-z0-9-]{0,47}$/.test(id)) { this.error = '渠道 ID 请使用 mobile- 开头的小写字母、数字或连字符'; return; }
+    if (!remove) { const error = this.customValidation(); if (error) { this.error = error; return; } }
     const generation = this.generation; this.busy = true; this.error = ''; this.notice = '';
     try {
       await this.idle(); if (generation !== this.generation) { return; }
@@ -231,14 +268,14 @@ export class ProviderStore {
       if (remove) { await this.api.request(path, http.RequestMethod.DELETE); }
       else {
         const body: CustomRequest = { id: id, name: this.customName.trim(), baseURL: this.customURL.trim(),
-          models: this.customModels.split(/[\n,]/).map((v: string) => v.trim()).filter((v: string) => v.length > 0) };
+          models: this.customModels.split(/[\n,，]/).map((v: string) => v.trim()).filter((v: string) => v.length > 0) };
         if (this.customKey.trim()) { body.apiKey = this.customKey.trim(); }
         await this.api.request(path, http.RequestMethod.PUT, body);
       }
       if (generation !== this.generation) { return; }
       this.customKey = ''; await this.api.request('/api/location/reload', http.RequestMethod.POST);
       if (generation !== this.generation) { return; }
-      await this.refresh(generation); await this.changed(); this.notice = remove ? '自定义渠道已删除' : '自定义渠道已保存，模型列表已刷新';
+      await this.refresh(generation); await this.changed(); if (remove) { this.newCustom(); } else { this.editingID = id; } this.notice = remove ? '自定义渠道已删除' : '自定义渠道已保存，模型列表已刷新';
     } catch (e) { if (generation === this.generation) { this.customKey = ''; this.report(e as Error); } }
     finally { if (generation === this.generation) { this.busy = false; } }
   }

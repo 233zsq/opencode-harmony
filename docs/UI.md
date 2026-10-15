@@ -41,3 +41,6 @@
     node tests/ui-smoke.mjs menu
 
 可通过HDC_TARGET指定设备，OPENCODE_UI_TAG为不同设备的截图和布局加前缀。最后按APPROVALS.md运行审批验收，并移除本轮fixture端口映射。
+## 后续完善（2026-10-15）
+
+审查增加“会话修改”，按服务器任务快照查看修改；任务运行中的追加消息合并，分页起点未确认时先加载更早记录。模型接入分为提供商、兼容渠道、模型目录，常用入口可快捷进入。填写Question或手动触摸列表暂停跟随，提交后恢复。详细验证见 [REFINEMENTS.md](REFINEMENTS.md)。

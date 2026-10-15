@@ -6,7 +6,7 @@ import { ProviderSettings } from '../components/ProviderSettings';
 import { FormFieldsView } from '../components/FormFieldsView';
 import { MessageDataSource } from '../presentation/MessageDataSource';
 import { ServerConfig, ProjectItem, SessionItem, ChatMessage, ToolItem, Interaction, FormField, Choice,
-  ModelItem, FileItem, DiffItem, DiffLine, parseDiff, visibleFormFields, messageKey, interactionKey, reasoningInProgress, toolStatus } from '../domain/Core';
+  ModelItem, FileItem, DiffItem, DiffLine, TurnItem, diffKey, parseDiff, visibleFormFields, messageKey, interactionKey, reasoningInProgress, toolStatus } from '../domain/Core';
 
 @Entry
 @Component
@@ -25,6 +25,7 @@ struct Index {
   @State reasoningClosed: string[] = [];
   private activeReasoning: string[] = [];
   private viewSession: string = '';
+  private viewContent: string = '';
   private scroller: Scroller = new Scroller();
   private messageSource: MessageDataSource = new MessageDataSource();
 
@@ -44,7 +45,9 @@ struct Index {
     this.activeReasoning = active;
     if (this.toolSheetOpen) { const tool = this.store.messages.flatMap((m: ChatMessage) => m.tools).find((t: ToolItem) => t.id === this.selectedTool.id); if (tool) { this.selectedTool = tool; } }
     this.messageSource.update(this.store.messages);
-    if (this.follow && this.store.pane === 'chat') { setTimeout(() => { if (this.follow) { this.scroller.scrollEdge(Edge.Bottom); } }, 40); }
+    const content = this.store.messages.map((message: ChatMessage) => messageKey(message)).join('|') + '/' + this.store.interactions.map((item: Interaction) => item.id).join('|');
+    const changed = content !== this.viewContent; this.viewContent = content;
+    if (changed && this.follow && this.store.pane === 'chat') { setTimeout(() => { if (this.follow) { this.scroller.scrollEdge(Edge.Bottom); } }, 40); }
   }
   private foregroundChanged(): void { this.store.setActive(this.foreground); }
 
@@ -206,15 +209,15 @@ struct Index {
         ApprovalPreviewView({ preview: item.approval, onReview: (): void => { this.follow = false; } })
       }
       FormFieldsView({ fields: this.store.currentFields(item.id),
-        onChange: (key: string, value: string, multiple: boolean): void => { this.store.updateField(item.id, key, value, multiple); },
+        onChange: (key: string, value: string, multiple: boolean): void => { this.follow = false; this.store.updateField(item.id, key, value, multiple); },
         onOpenLink: (url: string): void => { this.openLink(url); } }).enabled(this.store.itemState(item.id) !== 'submitting')
       Row({ space: 10 }) {
         Button(item.kind === 'form' ? '提交回答' : '批准一次', { type: ButtonType.Normal }).id('interaction-submit-' + item.id)
           .backgroundColor('#215D43').fontColor(Color.White).borderRadius(9).layoutWeight(1)
-          .enabled(this.store.itemState(item.id) !== 'submitting' && (item.kind === 'form' || this.store.canApprove(item.id))).onClick(() => { this.store.reply(item); })
+          .enabled(this.store.itemState(item.id) !== 'submitting' && (item.kind === 'form' || this.store.canApprove(item.id))).onClick(() => { this.follow = true; this.store.reply(item); })
         Button(item.kind === 'form' ? '取消' : '拒绝', { type: ButtonType.Normal }).id('interaction-reject-' + item.id)
           .backgroundColor('#EDE7D4').fontColor('#8D6647').borderRadius(9)
-          .enabled(this.store.itemState(item.id) !== 'submitting').onClick(() => { this.store.reply(item, true); })
+          .enabled(this.store.itemState(item.id) !== 'submitting').onClick(() => { this.follow = true; this.store.reply(item, true); })
       }.width('100%')
     }.id('interaction-card-' + item.id).padding(16).backgroundColor('#FFFBEF').borderRadius(14).width('100%')
   }
@@ -256,7 +259,7 @@ struct Index {
         }
         LazyForEach(this.messageSource, (message: ChatMessage) => { ListItem() { this.messageCard(message) } }, (message: ChatMessage) => messageKey(message))
         ForEach(this.store.interactions, (item: Interaction) => { ListItem() { this.interactionCard(item) } }, (item: Interaction) => interactionKey(item))
-      }.id('conversation-list').padding({ left: 22, right: 22 }).layoutWeight(1).width('100%').constraintSize({ maxWidth: 860 }).scrollBar(BarState.Off)
+      }.onTouch((event: TouchEvent) => { if (event.type === TouchType.Down) { this.follow = false; } }).id('conversation-list').padding({ left: 22, right: 22 }).layoutWeight(1).width('100%').constraintSize({ maxWidth: 860 }).scrollBar(BarState.Off)
         .onScrollFrameBegin((offset: number, state: ScrollState) => { if (state === ScrollState.Scroll && offset < 0) { this.follow = false; } return { offsetRemain: offset }; })
       Column({ space: 5 }) {
         Row({ space: 8 }) {
@@ -299,21 +302,53 @@ struct Index {
   review() {
     Scroll() {
       Column({ space: 12 }) {
-        this.heading('REVIEW CHANGES', '看看发生了什么', '只读查看当前工作区的文件和 Git 修改。')
+        this.heading('REVIEW CHANGES', '看看发生了什么', '查看工作区现状，或按会话任务回看文件修改。')
         Row({ space: 8 }) {
           Button('Git Diff', { type: ButtonType.Normal }).backgroundColor(this.store.reviewTab === 'diff' ? '#215D43' : '#E1EADD')
             .fontColor(this.store.reviewTab === 'diff' ? Color.White : '#5B785C').borderRadius(9)
             .onClick(() => { this.store.reviewTab = 'diff'; })
+          Button('会话修改', { type: ButtonType.Normal }).id('review-timeline').fontSize(12).backgroundColor(this.store.reviewTab === 'timeline' ? '#215D43' : '#E1EADD')
+            .fontColor(this.store.reviewTab === 'timeline' ? Color.White : '#5B785C').borderRadius(9).enabled(!!this.store.sessionID)
+            .onClick(() => { this.store.reviewTab = 'timeline'; if (!this.store.timelineLoaded) { this.store.loadTimeline(); } })
           Button('文件浏览', { type: ButtonType.Normal }).backgroundColor(this.store.reviewTab === 'files' ? '#215D43' : '#E1EADD')
             .fontColor(this.store.reviewTab === 'files' ? Color.White : '#5B785C').borderRadius(9)
             .onClick(() => { this.store.reviewTab = 'files'; })
           Blank()
           Button('刷新', { type: ButtonType.Normal }).backgroundColor(Color.Transparent).fontColor('#688363').fontSize(12)
-            .onClick(() => { this.store.openReview(); })
+            .onClick(() => { if (this.store.reviewTab === 'timeline') { this.store.loadTimeline(); } else { this.store.openReview(); } })
         }.width('100%')
         if (this.store.reviewTab === 'diff') {
-          ForEach(this.store.diffs, (diff: DiffItem) => { this.diffCard(diff) }, (diff: DiffItem) => diff.path)
+          ForEach(this.store.diffs, (diff: DiffItem) => { this.diffCard(diff) }, (diff: DiffItem) => diffKey(diff))
           if (this.store.diffs.length === 0) { Text(this.store.reviewLoaded ? '当前没有可显示的修改。' : this.store.error ? '读取修改失败，请刷新重试。' : '正在读取修改…').fontSize(14).fontColor('#83927F').padding(25) }
+        } else if (this.store.reviewTab === 'timeline') {
+          Text('同一轮任务中的追加消息合并显示。运行中的 Diff 随文件变化，点击刷新可重新读取。').fontSize(12).fontColor('#7A897F').width('100%')
+          if (this.store.timelineError) { Text(this.store.timelineError).fontSize(12).fontColor('#A35C49').width('100%') }
+          ForEach(this.store.turns, (turn: TurnItem) => {
+            Row({ space: 10 }) {
+              Column({ space: 5 }) {
+                Text(turn.title).fontSize(13).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor('#30473A').width('100%')
+                Text((turn.created ? new Date(turn.created).toLocaleString() + ' · ' : '') + turn.prompts + ' 条消息 · ' +
+                  (turn.partial ? '需加载更早记录确认起点' : turn.state === 'running' ? '尚未结束' : turn.state === 'failed' ? '任务未成功' : '已结束'))
+                  .fontSize(10).fontColor('#869187').width('100%')
+              }.layoutWeight(1)
+              Text(turn.id === this.store.turnID ? '已选择' : '查看').fontSize(11).fontColor('#6C8373')
+            }.id('turn-' + turn.id).padding(12).width('100%').borderRadius(10)
+              .backgroundColor(turn.id === this.store.turnID ? '#E5EEE8' : Color.White)
+              .onClick(() => { this.store.selectTurn(turn); })
+          }, (turn: TurnItem) => turn.id + turn.state + turn.prompts + String(turn.partial))
+          if (this.store.timelineCursor) {
+            Button(this.store.canLoadTimeline() ? '加载更早任务' : '已达到最近 300 条记录的窗口上限', { type: ButtonType.Normal })
+              .id('timeline-older').fontSize(12).enabled(!this.store.timelineBusy && this.store.canLoadTimeline()).onClick(() => { this.store.loadTimeline(true); })
+          }
+          if (this.store.timelineBusy) { Text('正在读取任务记录…').fontSize(12).fontColor('#869187') }
+          if (this.store.timelineLoaded && !this.store.turns.length) { Text('这个会话还没有任务记录。').fontSize(13).fontColor('#869187') }
+          if (this.store.turnID) {
+            Text('所选任务的文件修改').fontSize(15).fontWeight(FontWeight.Medium).fontColor('#345B40').width('100%')
+            if (this.store.turnError) { Text('读取失败：' + this.store.turnError).fontSize(12).fontColor('#A35C49').width('100%') }
+            if (this.store.turnBusy) { Text('正在比较任务快照…').fontSize(12).fontColor('#869187') }
+            ForEach(this.store.turnDiffs, (diff: DiffItem) => { this.diffCard(diff) }, (diff: DiffItem) => this.store.turnID + ':' + diffKey(diff))
+            if (this.store.turnLoaded && !this.store.turnDiffs.length) { Text('这轮任务没有文件修改。').fontSize(13).fontColor('#869187') }
+          }
         } else {
           Button('返回项目根目录', { type: ButtonType.Normal }).fontSize(12).backgroundColor('#E5EDE0').fontColor('#577651')
             .onClick(() => { this.store.openReview(); })

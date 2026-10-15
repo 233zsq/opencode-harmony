@@ -309,4 +309,39 @@ await test('new conversations immediately appear once in sidebar history',async(
  const store=new AppStore();store.connected='saved';store.directory='/repo';store.sessions=[{id:'ses_new',title:'stale'}];store.api={request:async()=>({data:{id:'ses_new',title:'New'}})};store.openSession=async()=>{};
  await store.createSession();assert.equal(store.sessions.length,1);assert.equal(store.sessions[0].title,'New');
 });
+
+await test('timeline merges steering prompts using server idle boundaries and protects a partial first turn',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'opencode'},'');
+ const entries=api.parseTimeline({data:[{id:'idle2',type:'idle',outcome:'succeeded'},{id:'u3',type:'user',text:'Next'},{id:'idle1',type:'idle',outcome:'failed'},{id:'u2',type:'user',text:'Steer'},{id:'u1',type:'user',text:'Start'}]});
+ const turns=core.groupTurns(entries,true);assert.equal(turns.length,2);assert.equal(turns[0].id,'u3');assert.equal(turns[0].state,'completed');assert.equal(turns[1].prompts,2);assert.equal(turns[1].partial,true);assert.equal(turns[1].state,'failed');
+ assert.equal(core.groupTurns(entries,false)[1].partial,false);
+});
+await test('turn diff requests include selected prompt and location and same-file changes get new render keys',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'opencode'},'');let path;api.request=async p=>{path=p;return{data:[{file:'same.ts',patch:'+new'}]};};
+ const diffs=await api.turnDiff('ses_a','/repo space','msg_a');assert.match(path,/from=msg_a/);assert.match(path,/location%5Bdirectory%5D=%2Frepo%20space/);assert.equal(diffs[0].patch,'+new');assert.notEqual(core.diffKey(diffs[0]),core.diffKey({path:'same.ts',patch:'+old'}));
+});
+await test('out-of-order task selection cannot display another tasks patch',async()=>{
+ const store=new AppStore();store.sessionID='ses_a';store.directory='/repo';let resolveA;store.api={turnDiff:async(_,__,id)=>id==='a'?new Promise(r=>resolveA=r):[{path:'same.ts',patch:'+B'}]};
+ const a=store.selectTurn({id:'a'});await store.selectTurn({id:'b'});resolveA([{path:'same.ts',patch:'+A'}]);await a;assert.equal(store.turnID,'b');assert.equal(store.turnDiffs[0].patch,'+B');assert.equal(store.turnBusy,false);
+ store.api.turnDiff=async()=>{throw new Error('offline');};await store.selectTurn({id:'c'});assert.equal(store.turnDiffs.length,0);assert.equal(store.turnLoaded,false);assert.equal(store.turnError,'offline');
+});
+await test('timeline paging repairs partial boundary and ignores disconnected reads',async()=>{
+ const store=new AppStore();store.sessionID='s';store.api={messages:async(_,cursor)=>cursor?{data:[{id:'u1',type:'user',text:'Start'},{id:'idle0',type:'idle'}]}:{data:[{id:'idle1',type:'idle'},{id:'u2',type:'user',text:'Steer'}],cursor:{next:'older'}},parseTimeline:protocol.Protocol.prototype.parseTimeline,turnDiff:async()=>[]};
+ await store.loadTimeline();assert.equal(store.turns[0].partial,true);assert.equal(store.turnID,'');await store.loadTimeline(true);assert.equal(store.turns.length,1);assert.equal(store.turns[0].id,'u1');assert.equal(store.turns[0].prompts,2);assert.equal(store.turns[0].partial,false);
+ let release;store.api.messages=()=>new Promise(r=>release=r);const read=store.loadTimeline();store.disconnect();release({data:[{id:'x',type:'user'}]});await read;assert.equal(store.turns.length,0);assert.equal(store.timelineBusy,false);
+});
+
+await test('custom configuration rejects full endpoints, duplicate models and unsafe text before any request',async()=>{
+ const store=new ProviderStore();let calls=0;store.attach({request:async()=>{calls++;}},'/repo',async()=>{});store.customAvailable=true;store.customID='mobile-valid';store.customName='Example';store.customURL='https://api.example.com/v1/chat/completions';store.customModels='one';await store.saveCustom();assert.equal(calls,0);assert.match(store.error,/Base URL/);
+ store.customURL='https://api.example.com/v1';store.customModels='one，one';await store.saveCustom();assert.equal(calls,0);assert.match(store.error,/重复/);
+ store.customModels='one';store.customKey='{file:/secret}';await store.saveCustom();assert.equal(calls,0);assert.match(store.error,/普通文本/);
+});
+await test('new channel and server changes clear prior editor values and never carry a saved key',async()=>{
+ const store=new ProviderStore();store.editCustom({id:'mobile-old',name:'Old',baseURL:'https://old.example.com/v1',models:['old'],hasKey:true});assert.equal(store.editingID,'mobile-old');assert.equal(store.customKey,'');store.customKey='test-only';store.newCustom();assert.equal(store.customID,'');assert.equal(store.customKey,'');assert.equal(store.editingID,'');
+ store.customName='Old';store.attach(undefined,'/new',async()=>{});assert.equal(store.customName,'');assert.equal(store.catalog.length,0);
+});
+await test('provider quick entry selects the server declared key form and catalog search remains bounded',async()=>{
+ const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',supported:true,fields:[]}],accounts:[]}];store.quickSelect('deepseek');assert.equal(store.selected,'deepseek');assert.equal(store.methodType,'key');
+ store.catalog=Array.from({length:100},(_,i)=>({id:'p/mimo-'+i,label:'MiMo '+i}));store.modelSearch='mimo';assert.equal(store.modelMatches().length,100);assert.equal(store.visibleModels().length,60);store.modelSearch='not present';assert.equal(store.visibleModels().length,0);
+});
 console.log(count + ' adapter/state tests passed.');

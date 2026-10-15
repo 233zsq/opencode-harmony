@@ -1,3 +1,4 @@
+import { ModelItem } from '../domain/Core';
 import { ProviderStore, Integration, AuthMethod, Account, CustomProvider } from '../presentation/ProviderStore';
 import { FormFieldsView } from './FormFieldsView';
 
@@ -19,6 +20,17 @@ export struct ProviderSettings {
           .fontSize(12).fontColor('#7A8B70').width('100%')
         if (this.store.error) { Text(this.store.error).fontSize(12).fontColor('#A35C49').width('100%') }
         if (this.store.notice) { Text(this.store.notice).fontSize(12).fontColor('#3B774C').width('100%') }
+        Row({ space: 6 }) {
+          Button('提供商', { type: ButtonType.Normal }).id('providers-native').fontSize(12).layoutWeight(1).backgroundColor(this.store.section === 'native' ? '#DDEBDD' : Color.White).onClick(() => { this.store.section = 'native'; })
+          Button('兼容渠道', { type: ButtonType.Normal }).id('providers-custom').fontSize(12).layoutWeight(1).backgroundColor(this.store.section === 'custom' ? '#DDEBDD' : Color.White).onClick(() => { this.store.section = 'custom'; })
+          Button('模型目录', { type: ButtonType.Normal }).id('providers-models').fontSize(12).layoutWeight(1).backgroundColor(this.store.section === 'models' ? '#DDEBDD' : Color.White).onClick(() => { this.store.section = 'models'; })
+        }.width('100%')
+        if (this.store.section === 'native') {
+          Row({ space: 8 }) {
+            Button('OpenCode / MiMo', { type: ButtonType.Normal }).id('quick-opencode').fontSize(12).layoutWeight(1).enabled(!this.store.busy && !this.store.attemptID).onClick(() => { this.store.quickSelect('opencode'); })
+            Button('DeepSeek', { type: ButtonType.Normal }).id('quick-deepseek').fontSize(12).layoutWeight(1).enabled(!this.store.busy && !this.store.attemptID).onClick(() => { this.store.quickSelect('deepseek'); })
+          }.width('100%')
+          Text('先选择提供商，再保存 Key 或完成授权。内置免费模型以服务器模型目录为准，可直接在对话顶部选择 MiMo。').fontSize(12).fontColor('#7A8B70').width('100%')
         TextInput({ placeholder: '搜索 DeepSeek、MiMo、OpenAI 或其他提供商', text: this.store.search }).id('provider-search')
           .fontSize(13).backgroundColor(Color.White).onChange((value: string) => { this.store.search = value; })
         Text('已发现 ' + this.store.entries.length + ' 个接入入口；输入名称搜索全部。').fontSize(11).fontColor('#899880').width('100%')
@@ -88,8 +100,13 @@ export struct ProviderSettings {
             }
           }.padding(16).width('100%').backgroundColor(Color.White).borderRadius(14)
         }
+        }
+        if (this.store.section === 'custom') {
         Column({ space: 12 }) {
-          this.cardTitle('自定义兼容渠道')
+          Row() {
+            Text('自定义兼容渠道').fontSize(18).fontWeight(FontWeight.Bold).fontColor('#274A35').layoutWeight(1)
+            Button('新建', { type: ButtonType.Normal }).id('custom-new').fontSize(12).enabled(!this.store.busy).onClick(() => { this.store.newCustom(); })
+          }.width('100%')
           if (!this.store.customAvailable) {
             Text('此服务器未启用手机端自定义渠道设置接口；内置提供商仍可连接。').fontSize(12).fontColor('#8A937D').width('100%')
           } else {
@@ -97,12 +114,14 @@ export struct ProviderSettings {
               Button(provider.name + (provider.hasKey ? ' · 已保存密钥' : ''), { type: ButtonType.Normal }).fontSize(13).width('100%')
                 .onClick(() => { this.store.editCustom(provider); })
             }, (provider: CustomProvider) => provider.id + provider.name + provider.baseURL + provider.models.join(',') + String(provider.hasKey))
-            TextInput({ placeholder: '渠道 ID，例如 mobile-my-api', text: this.store.customID }).id('custom-id').fontSize(13)
+            TextInput({ placeholder: '渠道 ID，例如 mobile-my-api', text: this.store.customID }).id('custom-id').fontSize(13).enabled(!this.store.editingID && !this.store.busy)
               .onChange((value: string) => { this.store.customID = value; })
             TextInput({ placeholder: '显示名称', text: this.store.customName }).id('custom-name').fontSize(13)
               .onChange((value: string) => { this.store.customName = value; })
+            Text(this.store.editingID ? '正在编辑：' + this.store.editingID + '。新建渠道请先点右上方“新建”。' : '新建渠道：ID 需唯一，模型 ID 请从提供商文档复制。').fontSize(11).fontColor('#7A8B70').width('100%')
             TextInput({ placeholder: 'https://api.example.com/v1', text: this.store.customURL }).id('custom-url').fontSize(13)
               .onChange((value: string) => { this.store.customURL = value; })
+            Text('Base URL 填写 API 根地址，不包含 /chat/completions。只支持公网 HTTPS 和 OpenAI Chat Completions 兼容协议；系统会再次验证地址。').fontSize(11).fontColor('#7A8B70').width('100%')
             TextArea({ placeholder: '模型 ID，每行一个，例如 deepseek-chat', text: this.store.customModels }).id('custom-models').height(100).fontSize(13)
               .onChange((value: string) => { this.store.customModels = value; })
             TextInput({ placeholder: 'API Key（编辑时留空保留）', text: this.store.customKey }).id('custom-key').type(InputType.Password).fontSize(13)
@@ -110,12 +129,27 @@ export struct ProviderSettings {
             Row({ space: 8 }) {
               Button('保存渠道', { type: ButtonType.Normal }).id('custom-save').layoutWeight(1).backgroundColor('#215D43').fontColor(Color.White)
                 .enabled(!this.store.busy).onClick(() => { this.store.saveCustom(); })
-              Button('删除此渠道', { type: ButtonType.Normal }).fontSize(12).enabled(!this.store.busy)
+              Button('删除此渠道', { type: ButtonType.Normal }).fontSize(12).enabled(!this.store.busy && !!this.store.editingID)
                 .onClick(() => { this.getUIContext().showAlertDialog({ title: '删除自定义渠道？', message: '使用该渠道的会话需重新选择模型。',
                   primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '删除', action: (): void => { this.store.saveCustom(true); } } }); })
             }.width('100%')
           }
         }.padding(16).backgroundColor(Color.White).borderRadius(14).width('100%')
+        }
+        if (this.store.section === 'models') {
+          Text('这是服务器声明的模型目录，出现名称不代表调用已验证。保存配置后刷新，回到对话顶部选择模型。').fontSize(12).fontColor('#7A8B70').width('100%')
+          if (this.store.catalogError) { Text(this.store.catalogError).fontSize(12).fontColor('#A35C49').width('100%') }
+          TextInput({ placeholder: '搜索模型名称、渠道或模型 ID', text: this.store.modelSearch }).id('model-catalog-search').fontSize(13)
+            .onChange((value: string) => { this.store.modelSearch = value; })
+          Text('匹配 ' + this.store.modelMatches().length + ' 个，最多显示前 60 个。').fontSize(11).fontColor('#899880').width('100%')
+          ForEach(this.store.visibleModels(), (model: ModelItem) => {
+            Column({ space: 5 }) {
+              Text(model.label).fontSize(14).fontColor('#33553B').width('100%')
+              Text(model.id).fontSize(11).fontColor('#7A8B70').copyOption(CopyOptions.InApp).width('100%')
+            }.padding(12).backgroundColor(Color.White).borderRadius(10).width('100%')
+          }, (model: ModelItem) => model.id + model.label)
+          if (!this.store.catalog.length && !this.store.catalogError) { Text('暂无可用目录，请连接项目并刷新。').fontSize(13).fontColor('#899880') }
+        }
       }.padding(18).width('100%')
     }.layoutWeight(1).scrollBar(BarState.Off)
   }

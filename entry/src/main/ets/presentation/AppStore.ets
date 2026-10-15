@@ -4,7 +4,7 @@ import { Storage } from '../data/Storage';
 import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
-  DiffItem, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
+  DiffItem, TurnItem, TimelineEntry, groupTurns, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
 
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
@@ -37,6 +37,19 @@ export class AppStore {
   private permissionEpoch: number = 0;
   files: FileItem[] = [];
   diffs: DiffItem[] = [];
+  turns: TurnItem[] = [];
+  turnID: string = '';
+  turnDiffs: DiffItem[] = [];
+  timelineBusy: boolean = false;
+  timelineLoaded: boolean = false;
+  timelineError: string = '';
+  timelineCursor: string = '';
+  turnBusy: boolean = false;
+  turnLoaded: boolean = false;
+  turnError: string = '';
+  private timelineEntries: TimelineEntry[] = [];
+  private timelineEpoch: number = 0;
+  private turnEpoch: number = 0;
   filePath: string = '';
   fileContent: string = '';
   fileTruncated: boolean = false;
@@ -111,7 +124,7 @@ export class AppStore {
   }
   disconnect(): void {
     this.providers.attach(undefined, '', async (): Promise<void> => {});
-    this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接';
+    this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接';
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
     this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false;
@@ -212,7 +225,7 @@ export class AppStore {
   }
   async selectProject(directory: string): Promise<void> {
     if (!this.api || !directory.trim()) { return; }
-    this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
+    this.clearTimeline(); this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
     this.providers.attach(api, directory.trim(), async (): Promise<void> => { await this.refreshModels(); });
     this.pendingSend = undefined; this.draft = ''; this.directory = directory.trim(); this.sessionID = ''; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
     this.fileContent = ''; this.filePath = ''; this.cursor = ''; this.error = ''; this.busy = true; this.syncing = false;
@@ -243,7 +256,7 @@ export class AppStore {
   }
   async openSession(session: SessionItem): Promise<void> {
     if (!this.api) { return; }
-    this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
+    this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model;
     this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
@@ -444,6 +457,40 @@ export class AppStore {
         await this.syncInteractions(api, id, item.kind, generation);
       }
     }
+  }
+  private clearTimeline(): void {
+    this.timelineEpoch++; this.turnEpoch++; this.timelineEntries = []; this.turns = []; this.turnID = ''; this.turnDiffs = [];
+    this.timelineBusy = false; this.timelineLoaded = false; this.timelineError = ''; this.timelineCursor = '';
+    this.turnBusy = false; this.turnLoaded = false; this.turnError = '';
+  }
+  async loadTimeline(older: boolean = false): Promise<void> {
+    if (!this.api || !this.sessionID || (older && (!this.timelineCursor || this.timelineBusy || this.timelineEntries.length >= 300))) { return; }
+    const api = this.api; const generation = this.generation; const epoch = ++this.timelineEpoch; const id = this.sessionID;
+    this.timelineBusy = true; this.timelineError = '';
+    if (!older) { this.turnEpoch++; this.turnID = ''; this.turnDiffs = []; this.turnLoaded = false; this.turnBusy = false; this.turnError = ''; }
+    try {
+      const response = await api.messages(id, older ? this.timelineCursor : '');
+      if (generation !== this.generation || epoch !== this.timelineEpoch) { return; }
+      const entries = api.parseTimeline(response);
+      const byID = new Map<string, TimelineEntry>();
+      (older ? entries.concat(this.timelineEntries) : entries).forEach((entry: TimelineEntry) => { byID.set(entry.id, entry); });
+      this.timelineEntries = Array.from(byID.values()).slice(-300);
+      this.timelineCursor = string(object(object(response)['cursor'])['next']);
+      this.turns = groupTurns(this.timelineEntries, !!this.timelineCursor); this.timelineLoaded = true;
+      if (!older && this.turns.length && !this.turns[0].partial) { await this.selectTurn(this.turns[0]); }
+    } catch (e) { if (generation === this.generation && epoch === this.timelineEpoch) { this.timelineError = (e as Error).message; } }
+    finally { if (generation === this.generation && epoch === this.timelineEpoch) { this.timelineBusy = false; } }
+  }
+  canLoadTimeline(): boolean { return !!this.timelineCursor && this.timelineEntries.length < 300; }
+  async selectTurn(turn: TurnItem): Promise<void> {
+    if (!this.api || !this.sessionID || turn.partial) { return; }
+    const api = this.api; const generation = this.generation; const epoch = ++this.turnEpoch;
+    this.turnID = turn.id; this.turnDiffs = []; this.turnError = ''; this.turnBusy = true; this.turnLoaded = false;
+    try {
+      const diffs = await api.turnDiff(this.sessionID, this.directory, turn.id);
+      if (generation === this.generation && epoch === this.turnEpoch) { this.turnDiffs = diffs; this.turnLoaded = true; }
+    } catch (e) { if (generation === this.generation && epoch === this.turnEpoch) { this.turnError = (e as Error).message; } }
+    finally { if (generation === this.generation && epoch === this.turnEpoch) { this.turnBusy = false; } }
   }
   async openReview(): Promise<void> {
     this.pane = 'review'; this.reviewLoaded = false; this.error = ''; const generation = this.generation;
