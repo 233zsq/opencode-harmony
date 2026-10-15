@@ -49,7 +49,7 @@ export interface ChatMessage {
   id: string; role: string; text: string; reasoning: string; parts: TextPart[]; tools: ToolItem[]; state: string;
 }
 export interface DiffLine { id: string; kind: string; text: string; oldLine: string; newLine: string; }
-export interface MarkdownBlock { id: string; kind: string; text: string; language: string; }
+export interface MarkdownBlock { id: string; kind: string; text: string; language: string;  rows?: string[][]; }
 export interface Choice { value: string; label: string; description: string; }
 export interface FormField {
   key: string; label: string; type: string; required: boolean; options: Choice[];
@@ -59,7 +59,7 @@ export interface Interaction {
   id: string; sessionID: string; kind: string; title: string; detail: string;
   fields: FormField[]; state: string;
 }
-export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; useDedicatedTrust?: boolean; }
+export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; useDedicatedTrust?: boolean; preferredModel?: string; }
 export interface ProjectItem { id: string; name: string; directory: string; }
 export interface SessionItem { id: string; title: string; directory: string; status: string; model: string; }
 export interface ModelItem { id: string; label: string; }
@@ -100,9 +100,9 @@ export function applyTextDelta(messages: ChatMessage[], id: string, ordinal: num
   return next;
 }
 
-export function parseDiff(patch: string, limit: number = 3000): DiffLine[] {
+export function parseDiff(patch: string, limit: number = 1500): DiffLine[] {
   let oldLine = 0; let newLine = 0;
-  return patch.split('\n').slice(0, limit).map((text: string, i: number) => {
+  return patch.split('\n', limit).map((text: string, i: number) => {
     let kind = 'context'; let left = ''; let right = '';
     const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
     if (match) { oldLine = Number(match[1]); newLine = Number(match[2]); kind = 'header'; }
@@ -116,27 +116,37 @@ export function parseDiff(patch: string, limit: number = 3000): DiffLine[] {
 }
 
 export function parseMarkdown(text: string): MarkdownBlock[] {
-  const blocks: MarkdownBlock[] = [];
-  let code = false; let language = ''; let lines: string[] = [];
-  const push = (kind: string, value: string, lang: string = ''): void => {
-    blocks.push({ id: String(blocks.length), kind: kind, text: value, language: lang });
-  };
+  const blocks: MarkdownBlock[] = []; let code = false; let language = ''; let lines: string[] = []; let paragraph: string[] = [];
+  const push = (kind: string, value: string, lang: string = ''): void => { blocks.push({ id: String(blocks.length), kind: kind, text: value, language: lang }); };
+  const flush = (): void => { if (paragraph.length) { push('text', paragraph.join('\n')); paragraph = []; } };
+  const cells = (line: string): string[] => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').slice(0, 12).map((v: string) => v.trim());
   const input = text.slice(0, 200000).split('\n');
-  input.forEach((line: string) => {
+  for (let i = 0; i < input.length; i++) {
+    const line = input[i];
     if (/^\s*\x60{3}/.test(line)) {
-      if (code) { push('code', lines.join('\n'), language); lines = []; }
-      else { language = line.replace(/^\s*\x60{3}/, '').trim(); }
-      code = !code; return;
+      flush(); if (code) { push('code', lines.join('\n'), language); lines = []; } else { language = line.replace(/^\s*\x60{3}/, '').trim(); }
+      code = !code; continue;
     }
-    if (code) { lines.push(line); return; }
-    if (/^#{1,6}\s/.test(line)) { push('heading', line.replace(/^#{1,6}\s+/, '')); }
-    else if (/^>\s?/.test(line)) { push('quote', line.replace(/^>\s?/, '')); }
-    else if (/^\s*[-*+]\s+/.test(line)) { push('list', '• ' + line.replace(/^\s*[-*+]\s+/, '')); }
-    else if (/^---+$/.test(line)) { push('rule', ''); }
-    else if (line.trim().length > 0) { push('text', line); }
-  });
-  if (code) { push('code', lines.join('\n'), language); }
-  return blocks;
+    if (code) { lines.push(line); continue; }
+    if (line.includes('|') && i + 1 < input.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(input[i + 1]) && input[i + 1].includes('-')) {
+      flush(); const table: string[][] = [cells(line)]; i++;
+      while (i + 1 < input.length && input[i + 1].includes('|') && table.length < 101) { table.push(cells(input[++i])); }
+      blocks.push({ id: String(blocks.length), kind: 'table', text: '', language: '', rows: table }); continue;
+    }
+    if (/^#{1,6}\s/.test(line)) { flush(); push('heading', line.replace(/^#{1,6}\s+/, '')); }
+    else if (/^>\s?/.test(line)) { flush(); push('quote', line.replace(/^>\s?/, '')); }
+    else if (/^\s*[-*+]\s+/.test(line)) { flush(); push('list', '• ' + line.replace(/^\s*[-*+]\s+/, '')); }
+    else if (/^\s*\d+[.)]\s+/.test(line)) { flush(); push('list', line.trim()); }
+    else if (/^---+$/.test(line)) { flush(); push('rule', ''); }
+    else if (!line.trim()) { flush(); } else { paragraph.push(line); }
+  }
+  flush(); if (code) { push('code', lines.join('\n'), language); } return blocks;
+}
+export interface TextPreview { text: string; truncated: boolean; }
+export function previewText(input: string, maxChars: number = 100000, maxLines: number = 1500): TextPreview {
+  const bounded = input.slice(0, maxChars); const lines = bounded.split('\n', maxLines + 1);
+  const truncated = input.length > maxChars || lines.length > maxLines;
+  return { text: lines.slice(0, maxLines).join('\n'), truncated: truncated };
 }
 
 export function normalizeUrl(input: string, allowHttp: boolean): string {
@@ -172,6 +182,10 @@ export function buildFormAnswer(fields: FormField[], strict: boolean = true): Re
   const answers: Record<string, FieldValue> = {};
   for (const field of fields) {
     if (!formActive(field, answers)) continue;
+    if (field.type === 'external') {
+      if (strict && field.text !== 'true') { throw new Error('请完成：' + field.label); }
+      continue;
+    }
     const c = field.constraints || {};
     let value: FieldValue | undefined;
     if (field.type === 'multiselect') value = field.values.length ? field.values : c.initial || [];
@@ -215,14 +229,14 @@ export function visibleFormFields(fields: FormField[]): FormField[] {
   const answers = buildFormAnswer(fields, false);
   return fields.filter(field => !field.constraints?.hidden && formActive(field, answers));
 }
-export interface InlinePart { id: string; text: string; kind: string; }
+export interface InlinePart { id: string; text: string; kind: string; url?: string; }
 export function inlineMarkdown(text: string): InlinePart[] {
   const parts: InlinePart[] = [];
   const pattern = /(\*\*([^*]+)\*\*|\x60([^\x60]+)\x60|\[([^\]]+)\]\((https?:\/\/[^)]+)\))/g;
   let start = 0; let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
     if (match.index > start) parts.push({ id: String(parts.length), text: text.slice(start, match.index), kind: 'text' });
-    parts.push({ id: String(parts.length), text: match[2] || match[3] || match[4], kind: match[2] ? 'bold' : match[3] ? 'code' : 'link' });
+    parts.push({ id: String(parts.length), text: match[2] || match[3] || match[4], kind: match[2] ? 'bold' : match[3] ? 'code' : 'link', url: match[5] || '' });
     start = pattern.lastIndex;
   }
   if (start < text.length) parts.push({ id: String(parts.length), text: text.slice(start), kind: 'text' });

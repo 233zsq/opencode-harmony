@@ -8,16 +8,17 @@
 
 - 多服务器配置、HTTP Basic 认证、连接与错误状态。
 - 项目/目录、创建和恢复会话、历史分页。
-- SSE 流式正文、推理与工具卡片，原生 Markdown 和代码块。
+- SSE 流式正文、推理与工具卡片；原生 Markdown、代码块、表格和可点击 HTTPS 链接。
 - V2 Question/Form：单选、多选、文本、条件字段、默认值与类型校验。
 - 单次批准/拒绝操作及提交状态。
-- 动态模型目录和会话模型切换。
+- 动态模型目录、会话模型切换及每个服务器的模型偏好。
+- 手机端提供商搜索、API Key、OAuth 设备码/授权码和多账号管理；受限自定义兼容渠道。
 - 只读文件浏览与 Git Diff。
 - 退避重连、回前台同步、消息 ID 去重与迟到响应隔离。
 
-已在 HarmonyOS 7 / API 26 本地模拟器构建、安装并启动。模拟器中的真实 MiMo 对话已通过端到端验证，另有30项回归测试与本机fixture交互验证。详细完成状态与限制见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行，Pad 使用本机 DevEco 调试签名及 Wi-Fi 调试。真实 MiMo 对话、Question、拒绝与批准文件修改、只读 Diff 和应用重开恢复均有设备验证；另有59项回归测试。详细证据与限制见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
-当前尚未完成 API 24 设备验收、真机签名与公网 HTTPS 接入。模型可用性取决于服务器提供商配置；本项目不打包模型密钥。
+独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
 ## 开发环境
 
@@ -33,7 +34,11 @@
 
     powershell -File scripts/build.ps1 -Install -Launch
 
-模拟器可安装 unsigned HAP；真机需在 DevEco Studio 登录并配置自己的调试签名。产物为 entry/build/default/outputs/default/entry-default-unsigned.hap。
+模拟器可安装 unsigned HAP；真机需在 DevEco Studio 登录并配置自己的调试签名。签名信息和证书仅保留本地，不提交仓库。指定 USB 或 Wi-Fi HDC 目标安装签名版：
+
+    powershell -File scripts/build.ps1 -Install -Launch -Signed -DeviceTarget "设备的HDC目标"
+
+产物位于 entry/build/default/outputs/default，分别为 entry-default-unsigned.hap 和配置签名后生成的 entry-default-signed.hap。
 
 测试（使用内置 Node）：
 
@@ -70,7 +75,8 @@ scripts/provision-server.sh 是供核验后使用的独立实例部署脚本。�
 - entry/src/main/ets/data：Network Kit 协议适配与安全存储。
 - entry/src/main/ets/presentation/AppStore.ets：业务状态和同步。
 - entry/src/main/ets/components：原生 UI 组件。
-- entry/src/main/ets/pages/Index.ets：连接、项目、聊天和审查。
+- entry/src/main/ets/pages/Index.ets：连接、项目、聊天、审查和设置。
+- server/mobile_settings.py：本实例受限自定义渠道接口，只管理 mobile-* 配置。
 - tests：协议与竞态回归、本机 fixture、模拟器交互。
 - docs：计划、验证状态、服务器边界及第三方来源。
 

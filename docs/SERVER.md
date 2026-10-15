@@ -56,3 +56,13 @@ App 地址填写 `https://<SERVER_IP>:9443`，用户名 `opencode`，使用本�
 - `scripts/provision-server.sh` 保留为初始开发部署记录，当前实例由上述系统 service 管理。
 
 撤销公网访问时，仅停止并禁用 `opencode-harmony-tls.service`，同时删除云侧9443入站规则。保留 Agent 与历史即可继续本地开发。若回滚旧实例，须先停止新 Agent，并明确同步迁移后的新增数据；旧快照不会自动包含新聊天。不要停止默认 OpenCode、共享 Nginx 或其他项目服务。
+
+## 手机端受限渠道设置
+
+新增 opencode-harmony-settings.service，使用同一隔离根及 oc-harmony-agent 账号，只有本应用 config 目录可写；监听127.0.0.1:4098。独立TLS代理的 /client-settings/ 路径使用同一 Basic认证，请求体上限64KiB；未修改共享Nginx。
+
+只允许管理 mobile-* 渠道，固定内置兼容适配器，允许名称、公网HTTPS地址、模型ID列表和API Key。拒绝任意文件/命令/插件/其他配置字段以及文件或环境变量插值。返回脱敏摘要；已有密钥不回显。配置文件0600，临时文件fsync后原子替换，保留不相关设置；任务或待交互存在时拒绝修改。
+
+scripts/deploy-settings.sh 用于首次安装，会拒绝覆盖已存在服务。更新需先核验并运行 tests/mobile_settings_test.py，再只替换本服务代码并重启 opencode-harmony-settings.service；不必重启Agent。测试使用临时目录和测试凭据，不修改真实配置。
+
+OpenCode v2.0.29在某些 glob/read 工具的可选 path 未提供时，将审批 metadata.path 编码为undefined，读取待批列表会返回400。真实验收采用只对 edit 请求审批的会话规则；该服务端问题未在客户端修复，也未擅自升级现有实例。手机仍保留上次成功读取的待办，不将失败读取当成空列表。

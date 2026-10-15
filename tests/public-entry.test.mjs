@@ -29,6 +29,9 @@ function request(path, {authenticated=false, password, trust=true, badName=false
 try {
   assert.equal((await request('/api/info')).code,401); console.log('PASS unauthenticated request is denied');
   assert.equal((await request('/api/info',{password:'deliberately-wrong'})).code,401);console.log('PASS wrong password is denied');
+  assert.equal((await request('/client-settings/providers')).code,401);console.log('PASS unauthenticated settings catalog is denied');
+  const settings=await request('/client-settings/providers',{authenticated:true});assert.equal(settings.code,200);
+  for(const provider of JSON.parse(settings.body).data)assert.deepEqual(Object.keys(provider).sort(),['baseURL','hasKey','id','models','name']);console.log('PASS authenticated settings catalog exposes only redacted fields');
   const info=await request('/api/info',{authenticated:true});assert.equal(info.code,200);assert.equal(JSON.parse(info.body).version,'2.0.29');console.log('PASS certificate, SPKI and authenticated API version');
   await assert.rejects(request('/api/info',{trust:false}));console.log('PASS unknown CA is rejected');
   await assert.rejects(request('/api/info',{badName:true}), /Hostname\/IP|altnames|does not match/i);console.log('PASS incorrect hostname is rejected');

@@ -9,7 +9,7 @@ const source = readFileSync(new URL('../entry/src/main/ets/domain/Core.ts', impo
 const emitted = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;
 const core = await import('data:text/javascript;base64,' + Buffer.from(emitted).toString('base64'));
 let count = 0;
-function test(name, run) { run(); count++; console.log('PASS ' + name); }
+function test(name, run) { try { run(); count++; console.log('PASS ' + name); } catch (error) { console.error('FAIL ' + name + ': ' + error.message); process.exit(1); } }
 const { SseParser, mergeMessages, applyTextDelta, parseDiff, parseMarkdown, normalizeUrl } = core;
 test('CRLF split, multiple data lines, id and retry', () => {
   const p = new SseParser();
@@ -100,4 +100,18 @@ test('inline Markdown bold, code and link labels are rendered without delimiters
   assert.equal(core.inlineMarkdown('**bold** and ' + String.fromCharCode(96) + 'code' + String.fromCharCode(96) + ' [link](https://example.com)').map(p => p.text).join(''), 'bold and code link');
 });
 
+test('Markdown supports tables, ordered lists and real link targets',()=>{
+  const blocks=core.parseMarkdown('| A | B |\n| --- | --- |\n| one | two |\n\n1. First\n2. Second');
+  assert.equal(blocks[0].kind,'table');assert.deepEqual(blocks[0].rows,[['A','B'],['one','two']]);
+  assert.equal(blocks[1].text,'1. First');assert.equal(core.inlineMarkdown('[Docs](https://example.com)')[0].url,'https://example.com');
+});
+test('file previews and diff parsing are bounded with explicit truncation',()=>{
+  const input=Array.from({length:5000},(_,i)=>'Line '+i).join('\n');
+  const preview=core.previewText(input,100000,1500);assert.equal(preview.truncated,true);assert.equal(preview.text.split('\n').length,1500);
+  assert.equal(core.parseDiff(input).length,1500);assert.equal(core.previewText('small').truncated,false);
+});
+test('external form requires user confirmation but is omitted from server answers',()=>{
+  const field={key:'external',label:'External step',type:'external',options:[],values:[],text:'',required:false};
+  assert.throws(()=>core.buildFormAnswer([field]));field.text='true';assert.deepEqual(core.buildFormAnswer([field]),{});
+});
 console.log(count + ' core tests passed.');

@@ -1,0 +1,50 @@
+import { FormField, Choice, visibleFormFields } from '../domain/Core';
+
+@Component
+export struct FormFieldsView {
+  @Prop fields: FormField[] = [];
+  onChange: (key: string, value: string, multiple: boolean) => void = (): void => {};
+  onOpenLink: (url: string) => void = (): void => {};
+  build() {
+    Column({ space: 12 }) {
+      ForEach(visibleFormFields(this.fields), (field: FormField) => {
+        Column({ space: 8 }) {
+          Text(field.label + (field.required ? ' *' : '')).fontSize(14).fontWeight(FontWeight.Medium).fontColor('#294C38').width('100%')
+          if (field.type === 'external') {
+            Button('打开授权页面', { type: ButtonType.Normal }).fontSize(12).backgroundColor('#E5EEE2').fontColor('#315D42')
+              .onClick(() => { this.onOpenLink(field.constraints?.url || ''); })
+            Row({ space: 6 }) {
+              Checkbox().select(field.text === 'true').onChange((value: boolean) => { this.onChange(field.key, String(value), false); })
+              Text('我已完成外部步骤').fontSize(12).fontColor('#61735F')
+            }
+          } else if (field.type === 'boolean') {
+            Toggle({ type: ToggleType.Switch, isOn: field.text === 'true' })
+              .onChange((value: boolean) => { this.onChange(field.key, String(value), false); })
+          } else {
+            ForEach(field.options, (choice: Choice) => {
+              Row({ space: 8 }) {
+                if (field.type === 'multiselect') {
+                  Checkbox().id('choice-' + field.key + '-' + choice.value).select(field.values.indexOf(choice.value) >= 0)
+                    .onChange(() => { this.onChange(field.key, choice.value, true); })
+                } else {
+                  Radio({ value: choice.value, group: field.key }).id('choice-' + field.key + '-' + choice.value)
+                    .checked(field.text === choice.value).onChange((checked: boolean) => { if (checked) { this.onChange(field.key, choice.value, false); } })
+                }
+                Column({ space: 3 }) {
+                  Text(choice.label).fontSize(13).fontColor('#38563E')
+                  if (choice.description) { Text(choice.description).fontSize(10).fontColor('#8B9784') }
+                }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+                  .onClick(() => { this.onChange(field.key, choice.value, field.type === 'multiselect'); })
+              }.width('100%')
+            }, (choice: Choice) => choice.value)
+            if (field.type !== 'multiselect' && (!field.options.length || field.constraints?.custom)) {
+              TextInput({ placeholder: field.options.length ? '或输入自定义回答' : '请输入', text: field.text }).id('field-' + field.key)
+                .type(/key|token|password|secret/i.test(field.key) ? InputType.Password : field.type === 'number' ? InputType.Number : InputType.Normal)
+                .fontSize(13).backgroundColor('#F2F5EE').onChange((value: string) => { this.onChange(field.key, value, false); })
+            }
+          }
+        }.width('100%').alignItems(HorizontalAlign.Start)
+      }, (field: FormField) => field.key)
+    }.width('100%').alignItems(HorizontalAlign.Start)
+  }
+}

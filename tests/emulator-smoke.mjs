@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 const ide = process.env.DEVECO_STUDIO_HOME || 'C:/Program Files/Huawei/DevEco Studio';
 const hdc = resolve(ide, 'sdk/default/openharmony/toolchains/hdc.exe');
 const root = resolve(import.meta.dirname, '..');
 const dir = resolve(root, '.test'); mkdirSync(dir, { recursive: true });
-function command(...args) { return execFileSync(hdc, ['-t', '127.0.0.1:5555', ...args], { encoding: 'utf8', timeout: 20000 }); }
+function command(...args) { return execFileSync(hdc, ['-t', process.env.HDC_TARGET || '127.0.0.1:5555', ...args], { encoding: 'utf8', timeout: 20000 }); }
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function nodes(node) { return [node.attributes, ...(node.children || []).flatMap(nodes)]; }
 function layout() {
@@ -203,4 +203,64 @@ else if (mode === 'https-resume') {
   if (layout().some(n=>n.text==='鸿蒙客户端真实接口联调')) { await click('鸿蒙客户端真实接口联调');await pause(1200); }
   if (!layout().some(n=>n.id==='chat-input')) throw new Error('HTTPS restoration failed');
   console.log('Saved HTTPS credentials restored; native chat ready.');await screenshot('public-https-restored');
+}
+
+else if (mode === 'acceptance-start') {
+  const {directory}=JSON.parse(readFileSync(resolve(dir,'acceptance.json'),'utf8'));
+  await click('项目');await pause(300);await input('project-path',directory);await click('open-project');await pause(1300);
+  await click('真实任务闭环验收');await pause(1000);
+  await input('chat-input','First use your question tool to ask one choice (Chinese/English), a multiple choice (code/docs), and a text greeting prefix. Wait for my answers. Then update greeting.ts accordingly and add a README usage example. Use tools; change files only in this repo. Do not run destructive commands or make network requests.');
+  await click('send-button');await pause(1800);await screenshot('acceptance-start');
+  console.log('Native UI submitted real file-edit task to isolated acceptance session.');
+}
+
+else if (mode === 'acceptance-continue') {
+  await input('chat-input','Please perform my previous task now with the available MiMo model. First use the question tool and wait for my answers.');
+  await click('send-button');await pause(1600);console.log('Native UI resumed real task after explicit model switch.');
+}
+
+else if (mode === 'acceptance-approve') {
+  await click('批准一次');await pause(700);console.log('Native UI approved one real pending tool operation.');await screenshot('acceptance-approved');
+}
+
+else if (mode === 'acceptance-answer') {
+  command('shell','uitest uiInput swipe 640 1000 640 2000 600');await pause(200);
+  command('shell','uitest uiInput swipe 640 1000 640 2000 600');await pause(200);
+  async function revealField(id) {
+    for(let i=0;i<9;i++) {
+      const n=layout().find(n=>n.id===id);const b=n?.bounds.match(/-?\d+/g).map(Number);
+      if(n&&n.visible!=='false'&&b[1]>650&&b[3]<2100)return;
+      command('shell',n&&b[1]<650?'uitest uiInput swipe 640 1100 640 2000 500':'uitest uiInput swipe 640 2000 640 1100 500');await pause(250);
+    }
+    throw new Error('Real Question input not visible: '+id);
+  }
+  await revealField('field-q0');await input('field-q0','Chinese (中文)');
+  await revealField('field-q1');await input('field-q1','Both');
+  await revealField('field-q2');await input('field-q2','你好，');
+  command('shell','uitest uiInput swipe 640 2000 640 1100 500');await pause(300);
+  await click('提交回答');await pause(1000);await screenshot('acceptance-question-answered');console.log('Native UI answered real Agent Question with choices and custom Chinese text.');
+}
+
+else if (mode === 'acceptance-edit') {
+  await input('chat-input','The answers are Chinese, Both code and docs, and greeting prefix 你好，. Implement greeting.ts and the README usage example now. Work only in this repository. Use your edit tools and wait for approval when required.');
+  await click('send-button');await pause(1200);console.log('Native UI resumed file-edit phase with edit-only approval.');
+}
+
+else if (mode === 'acceptance-reject') {
+  const all=layout();const index=all.findIndex(n=>n.type==='Button'&&n.text==='拒绝'&&n.visible!=='false'&&n.bounds.match(/-?\d+/g).map(Number)[1]>650);
+  if(index<0)throw new Error('No visible real edit approval');
+  const resource=all.slice(0,index).reverse().find(n=>n.type==='Text'&&(n.text==='greeting.ts'||n.text==='README.md'))?.text;
+  if(!resource)throw new Error('Unknown approval resource');
+  const b=all[index].bounds.match(/-?\d+/g).map(Number);command('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));
+  writeFileSync(resolve(dir,'rejected-resource.json'),JSON.stringify({path:resource}));await pause(700);await screenshot('acceptance-rejected');
+  console.log('Native UI rejected real edit of '+resource);
+}
+
+else if (mode === 'acceptance-retry') {
+  await input('chat-input','I deliberately rejected the last batch for testing. Retry the same two edits now; I will approve this time.');
+  await click('send-button');await pause(1000);console.log('Native UI explicitly resumed task after rejection.');
+} else if (mode === 'acceptance-open') {
+  const {directory}=JSON.parse(readFileSync(resolve(dir,'acceptance.json'),'utf8'));
+  await click('项目');await input('project-path',directory);await click('open-project');await pause(1100);await click('真实任务闭环验收');await pause(1000);
+  console.log('Native UI restored the real acceptance session.');await screenshot(process.env.HDC_TARGET?'pad-acceptance':'acceptance-restored');
 }

@@ -1,6 +1,9 @@
 import { common } from '@kit.AbilityKit';
 import { AppStore } from '../presentation/AppStore';
 import { MarkdownText } from '../components/MarkdownText';
+import { ProviderSettings } from '../components/ProviderSettings';
+import { FormFieldsView } from '../components/FormFieldsView';
+import { MessageDataSource } from '../presentation/MessageDataSource';
 import { ServerConfig, ProjectItem, SessionItem, ChatMessage, ToolItem, Interaction, FormField, Choice,
   ModelItem, FileItem, DiffItem, DiffLine, parseDiff, visibleFormFields, messageKey } from '../domain/Core';
 
@@ -12,6 +15,7 @@ struct Index {
   @State follow: boolean = true;
   @State expandedTool: string = '';
   private scroller: Scroller = new Scroller();
+  private messageSource: MessageDataSource = new MessageDataSource();
 
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext();
@@ -19,10 +23,16 @@ struct Index {
   }
   aboutToDisappear(): void { this.store.setActive(false); }
   private storeChanged(): void {
+    this.messageSource.update(this.store.messages);
     if (this.follow && this.store.pane === 'chat') { setTimeout(() => { if (this.follow) { this.scroller.scrollEdge(Edge.Bottom); } }, 40); }
   }
   private foregroundChanged(): void { this.store.setActive(this.foreground); }
 
+  private openLink(url: string): void {
+    if (!/^https:\/\/[^/?#\s@]+(?:[/?#][^\s]*)?$/.test(url)) { this.store.error = '仅支持不含账号密码的 HTTPS 授权地址'; return; }
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (context) { context.openLink(url).catch(() => { this.store.error = '无法打开浏览器，请稍后重试'; }); }
+  }
   @Builder
   badge(label: string, color: string = '#DDEAE2') {
     Text(label).fontSize(11).fontColor('#315446').padding({ left: 9, right: 9, top: 5, bottom: 5 })
@@ -162,42 +172,13 @@ struct Index {
           if (this.store.showReasoning) { Text(message.reasoning).fontSize(12).fontColor('#74816F').lineHeight(19).copyOption(CopyOptions.InApp) }
         }.alignItems(HorizontalAlign.Start).padding(12).backgroundColor('#F0F2E8').borderRadius(10).width('100%')
       }
-      if (message.text) { MarkdownText({ content: message.text }) }
+      if (message.text) { MarkdownText({ content: message.text, onOpenLink: (url: string): void => { this.openLink(url); } }) }
       ForEach(message.tools, (tool: ToolItem) => { this.toolCard(tool) }, (tool: ToolItem) => tool.id)
       if (!message.text && !message.reasoning && message.tools.length === 0) {
         Text(message.role === 'assistant' ? '正在等待输出…' : message.role).fontSize(12).fontColor('#89968B')
       }
     }.alignItems(HorizontalAlign.Start).padding(16).backgroundColor(message.role === 'user' ? '#E6EEE1' : Color.White)
       .borderRadius(15).width('100%')
-  }
-  @Builder
-  formField(item: Interaction, field: FormField) {
-    Column({ space: 8 }) {
-      Text(field.label + (field.required ? ' *' : '')).fontSize(13).fontWeight(FontWeight.Medium).fontColor('#354A3B').width('100%')
-      ForEach(field.options, (choice: Choice) => {
-        Row({ space: 9 }) {
-          Text(this.store.selected(item.id, field.key, choice.value) ? '●' : '○').fontColor('#2D7150').fontSize(17)
-          Column({ space: 3 }) {
-            Text(choice.label).fontSize(13).fontColor('#33513D')
-            if (choice.description) { Text(choice.description).fontSize(11).fontColor('#82917F') }
-          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        }.width('100%').padding(10).backgroundColor(this.store.selected(item.id, field.key, choice.value) ? '#DCEADB' : '#F4F6EE')
-          .borderRadius(8).enabled(this.store.itemState(item.id) !== 'submitting')
-          .onClick(() => { this.store.updateField(item.id, field.key, choice.value, field.type === 'multiselect'); })
-      }, (choice: Choice) => choice.value)
-      if (field.type === 'boolean') {
-        Row({ space: 10 }) {
-          Button('是').backgroundColor(this.store.fieldText(item.id, field.key) === 'true' ? '#215D43' : '#A6B8A6')
-            .onClick(() => { this.store.updateField(item.id, field.key, 'true'); })
-          Button('否').backgroundColor(this.store.fieldText(item.id, field.key) === 'false' ? '#215D43' : '#A6B8A6')
-            .onClick(() => { this.store.updateField(item.id, field.key, 'false'); })
-        }
-      } else if (field.type !== 'multiselect' && (!field.options.length || field.constraints?.custom)) {
-        TextInput({ placeholder: field.options.length ? '或输入自定义答案' : '请输入回答', text: this.store.fieldText(item.id, field.key) })
-          .id('field-' + field.key).backgroundColor('#F0F3E9').fontSize(13).enabled(this.store.itemState(item.id) !== 'submitting')
-          .onChange((value: string) => { this.store.updateField(item.id, field.key, value); })
-      }
-    }.width('100%')
   }
   @Builder
   interactionCard(item: Interaction) {
@@ -209,7 +190,9 @@ struct Index {
       }.width('100%')
       Text(item.title).fontSize(17).fontWeight(FontWeight.Bold).fontColor('#514C2F').width('100%')
       if (item.detail) { Text(item.detail).fontSize(12).fontFamily('monospace').fontColor('#7A765E').copyOption(CopyOptions.InApp).width('100%') }
-      ForEach(visibleFormFields(this.store.currentFields(item.id)), (field: FormField) => { this.formField(item, field) }, (field: FormField) => field.key)
+      FormFieldsView({ fields: this.store.currentFields(item.id),
+        onChange: (key: string, value: string, multiple: boolean): void => { this.store.updateField(item.id, key, value, multiple); },
+        onOpenLink: (url: string): void => { this.openLink(url); } }).enabled(this.store.itemState(item.id) !== 'submitting')
       Row({ space: 10 }) {
         Button(item.kind === 'form' ? '提交回答' : '批准一次', { type: ButtonType.Normal })
           .backgroundColor('#215D43').fontColor(Color.White).borderRadius(9).layoutWeight(1)
@@ -255,7 +238,7 @@ struct Index {
             }.height(220).width('100%').justifyContent(FlexAlign.Center)
           }
         }
-        ForEach(this.store.messages, (message: ChatMessage) => {
+        LazyForEach(this.messageSource, (message: ChatMessage) => {
           ListItem() { this.messageCard(message) }
         }, (message: ChatMessage) => messageKey(message))
         ForEach(this.store.interactions, (item: Interaction) => {
@@ -270,7 +253,7 @@ struct Index {
       Row({ space: 8 }) {
         Button(this.follow ? '跟随输出 ✓' : '↓ 回到最新', { type: ButtonType.Normal }).fontSize(10).height(26)
           .backgroundColor(Color.Transparent).fontColor('#6C826A')
-          .onClick(() => { this.follow = true; this.scroller.scrollEdge(Edge.Bottom); })
+          .onClick(() => { this.follow = true; if (this.store.readingHistory) { this.store.latest(); } else { this.scroller.scrollEdge(Edge.Bottom); } })
         Blank()
         if (this.store.working) {
           Button('停止任务', { type: ButtonType.Normal }).fontSize(10).height(26).backgroundColor('#EDE5DA').fontColor('#9A6B56')
@@ -301,7 +284,7 @@ struct Index {
         }.alignItems(VerticalAlign.Top).width('100%').padding(3)
           .backgroundColor(line.kind === 'add' ? '#E0EFDF' : line.kind === 'remove' ? '#F4E4E1' : '#F4F6EF')
       }, (line: DiffLine) => line.id)
-      if (diff.patch.split('\n').length > 1500) { Text('仅显示前 1500 行，请在桌面查看完整修改。').fontSize(11).fontColor('#8D815C') }
+      if (diff.patch.split('\n', 1501).length > 1500) { Text('仅显示前 1500 行，请在桌面查看完整修改。').fontSize(11).fontColor('#8D815C') }
     }.padding(13).backgroundColor(Color.White).borderRadius(12).width('100%')
   }
   @Builder
@@ -335,6 +318,7 @@ struct Index {
           }, (file: FileItem) => file.path)
           if (this.store.fileContent) {
             Column({ space: 10 }) {
+              if (this.store.fileTruncated) { Text('文件较长，仅显示前1500行或100000字；完整内容保留在服务器。').fontSize(11).fontColor('#9A8054') }
               Text(this.store.filePath).fontSize(12).fontWeight(FontWeight.Bold).fontColor('#415F44').width('100%')
               Text(this.store.fileContent).fontFamily('monospace').fontSize(11).fontColor('#4F6650')
                 .copyOption(CopyOptions.InApp).width('100%')
@@ -359,9 +343,13 @@ struct Index {
       Button('审查', { type: ButtonType.Normal }).layoutWeight(1).fontSize(12).enabled(this.store.directory.length > 0)
         .fontColor(this.store.pane === 'review' ? '#215D43' : '#96A18F').backgroundColor(Color.Transparent)
         .onClick(() => { this.store.openReview(); })
+      Button('设置', { type: ButtonType.Normal }).id('settings-tab').layoutWeight(1).fontSize(12).enabled(this.store.connected.length > 0)
+        .fontColor(this.store.pane === 'settings' ? '#215D43' : '#96A18F').backgroundColor(Color.Transparent)
+        .onClick(() => { this.store.openSettings(); })
     }.width('100%').height(52).backgroundColor('#FBFCF7').border({ width: { top: 1 }, color: '#E1E8DB' })
   }
   build() {
+    Row() {
     Column() {
       Row({ space: 8 }) {
         Text('◈').fontSize(25).fontColor('#2F6945')
@@ -379,8 +367,10 @@ struct Index {
       if (this.store.pane === 'connections') { this.connections() }
       else if (this.store.pane === 'projects') { this.projects() }
       else if (this.store.pane === 'chat') { this.chat() }
+      else if (this.store.pane === 'settings') { ProviderSettings({ store: this.store.providers, onOpenLink: (url: string): void => { this.openLink(url); } }) }
       else { this.review() }
       this.navigation()
-    }.width('100%').height('100%').backgroundColor('#F4F6ED')
+    }.width('100%').height('100%').constraintSize({ maxWidth: 1000 }).backgroundColor('#F4F6ED')
+    }.width('100%').height('100%').justifyContent(FlexAlign.Center).backgroundColor('#F4F6ED')
   }
 }

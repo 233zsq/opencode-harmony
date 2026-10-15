@@ -16,6 +16,26 @@ export function rows(value: Object): Object[] {
   return Array.isArray(value) ? value as Object[] : list(object(value)['data']);
 }
 
+export function parseFields(value: Object | undefined): FormField[] {
+  const fields: FormField[] = [];
+  list(value).forEach((value: Object) => {
+  const f = object(value); const options: Choice[] = list(f['options']).map((choice: Object): Choice => {
+    const c = object(choice);
+    return { value: string(c['value']), label: string(c['label'], string(c['value'])), description: string(c['description']) };
+  });
+  fields.push({ key: string(f['key']), label: string(f['title'], string(f['key'])), type: string(f['type'], 'string'),
+    required: f['required'] === true, options: options,
+    values: Array.isArray(f['default']) ? list(f['default']).map((v: Object) => string(v)) : [],
+    text: typeof f['default'] === 'string' || typeof f['default'] === 'number' || typeof f['default'] === 'boolean' ? String(f['default']) : '',
+    constraints: { hidden: f['hidden'] === true, custom: f['custom'] === true, initial: f['default'] as FieldValue,
+      when: list(f['when']).map((v: Object): FormCondition => ({ key: string(object(v)['key']), op: string(object(v)['op']), value: object(v)['value'] as FieldValue })),
+      minimum: f['minimum'] as number, maximum: f['maximum'] as number, minLength: f['minLength'] as number,
+      maxLength: f['maxLength'] as number, minItems: f['minItems'] as number, maxItems: f['maxItems'] as number,
+      pattern: string(f['pattern']), format: string(f['format']), url: string(f['url']) } as FieldConstraints });
+});
+  return fields;
+}
+
 export class ApiError extends Error {
   code: number;
   constructor(code: number, message: string) { super(message); this.code = code; }
@@ -112,32 +132,19 @@ export class Protocol {
             output: list(state['content']).map((c: Object) => string(object(c)['text'])).join('\n') || json(state['error']) });
         }
       });
+      const failure = object(m['error']);
       const text = role === 'user' ? string(m['text'], string(object(m['payload'])['text'])) :
-        parts.filter((p: TextPart) => p.type === 'text').map((p: TextPart) => p.text).join('\n') || (role === 'assistant' ? '' : role === 'model-switched' ? '会话模型已切换' : role === 'agent-switched' ? 'Agent 已切换' : role === 'location-switched' ? '工作目录已切换' : '会话状态已更新');
+        parts.filter((p: TextPart) => p.type === 'text').map((p: TextPart) => p.text).join('\n') || (role === 'assistant' ? (failure['message'] ? '模型调用失败：' + string(failure['message']).slice(0, 500) : '') : role === 'model-switched' ? '会话模型已切换' : role === 'agent-switched' ? 'Agent 已切换' : role === 'location-switched' ? '工作目录已切换' : '会话状态已更新');
       return { id: string(m['id']), role: role, text: text,
         reasoning: parts.filter((p: TextPart) => p.type === 'reasoning').map((p: TextPart) => p.text).join('\n'),
-        parts: parts, tools: tools, state: object(m['time'])['completed'] ? 'completed' : 'streaming' };
+        parts: parts, tools: tools, state: m['finish'] === 'error' ? 'failed' : object(m['time'])['completed'] ? 'completed' : 'streaming' };
     }).filter((m: ChatMessage) => m.id.length > 0 && m.role !== 'idle');
   }
   async interactions(sessionID: string, kind: string): Promise<Interaction[]> {
     const path = '/api/session/' + encodeURIComponent(sessionID) + (kind === 'form' ? '/form' : '/permission');
     return rows(await this.request(path)).map((v: Object): Interaction => {
-      const p = object(v); const fields: FormField[] = [];
-      list(p['fields']).forEach((value: Object) => {
-        const f = object(value); const options: Choice[] = list(f['options']).map((choice: Object): Choice => {
-          const c = object(choice);
-          return { value: string(c['value']), label: string(c['label'], string(c['value'])), description: string(c['description']) };
-        });
-        fields.push({ key: string(f['key']), label: string(f['title'], string(f['key'])), type: string(f['type'], 'string'),
-          required: f['required'] === true, options: options,
-          values: Array.isArray(f['default']) ? list(f['default']).map((v: Object) => string(v)) : [],
-          text: typeof f['default'] === 'string' || typeof f['default'] === 'number' || typeof f['default'] === 'boolean' ? String(f['default']) : '',
-          constraints: { hidden: f['hidden'] === true, custom: f['custom'] === true, initial: f['default'] as FieldValue,
-            when: list(f['when']).map((v: Object): FormCondition => ({ key: string(object(v)['key']), op: string(object(v)['op']), value: object(v)['value'] as FieldValue })),
-            minimum: f['minimum'] as number, maximum: f['maximum'] as number, minLength: f['minLength'] as number,
-            maxLength: f['maxLength'] as number, minItems: f['minItems'] as number, maxItems: f['maxItems'] as number,
-            pattern: string(f['pattern']), format: string(f['format']), url: string(f['url']) } as FieldConstraints });
-      });
+      const p = object(v);
+      const fields = parseFields(p['fields']);
       return { id: string(p['id']), sessionID: sessionID, kind: kind,
         title: string(p['title'], string(p['action'], '操作审批')),
         detail: kind === 'form' ? string(p['description']) : list(p['resources']).map((r: Object) => string(r)).join('\n'),

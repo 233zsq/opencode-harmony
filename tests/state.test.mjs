@@ -12,7 +12,7 @@ class Decoder { constructor() { this.decoder = new TextDecoder(); } decodeToStri
 class Base64 { encodeToStringSync(bytes) { return Buffer.from(bytes).toString('base64'); } }
 const requests = [];
 const httpMock = {
-  RequestMethod: { GET: 'GET', POST: 'POST', DELETE: 'DELETE' }, HttpDataType: { STRING: 0 },
+  RequestMethod: { GET: 'GET', POST: 'POST', DELETE: 'DELETE', PATCH: 'PATCH', PUT: 'PUT' }, HttpDataType: { STRING: 0 },
   createHttp: () => ({
     request: async (url, options) => { requests.push({ url, options }); return { responseCode: 200, result: '{"version":"2.0.29"}' }; },
     destroy() {}, on() {}, requestInStream: async (url, options) => { requests.push({ url, options }); return 200; }
@@ -40,6 +40,7 @@ function load(file, key) {
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
 const trust = load('entry/src/main/ets/data/DedicatedTrust.ets', './DedicatedTrust');
 const protocol = load('entry/src/main/ets/data/Protocol.ets', '../data/Protocol');
+const { ProviderStore } = load('entry/src/main/ets/presentation/ProviderStore.ets', './ProviderStore');
 const { AppStore } = load('entry/src/main/ets/presentation/AppStore.ets', 'store');
 let count = 0;
 async function test(name, run) { await run(); count++; console.log('PASS ' + name); }
@@ -177,6 +178,77 @@ await test('certificate validation errors stop SSE retries and stay stopped on f
   store.api={stream: (frame,data,done)=>{end=done;opened++;return ()=>{closed++;};}};
   store.openStream();end(protocol.networkError(Object.assign(new Error('raw'),{code:2300060})));
   assert.equal(store.status,'证书校验失败');assert.equal(store.retryTimer,-1);assert.equal(closed,1);
-  store.setActive(true);assert.equal(opened,1);
+  store.setActive(false);store.setActive(true);assert.equal(opened,1);
+});
+await test('provider errors render the useful message without response bodies', async () => {
+  const api=new protocol.Protocol({url:'https://example.com',username:'opencode'},'');
+  const m=api.parseMessages({data:[{id:'m',type:'assistant',content:[],finish:'error',error:{message:'Region unavailable',response:{body:'private-response'}}}]})[0];
+  assert.equal(m.state,'failed');assert.match(m.text,/Region unavailable/);assert.ok(!m.text.includes('private-response'));
+});
+delete httpMock.RequestMethod.PATCH; // API24 does not export the enum member.
+const integration={id:'deepseek',name:'DeepSeek',connections:[{id:'cred_a',type:'credential',label:'Test',method:'key',value:{key:'must-never-appear'}}],methods:[{type:'key'},{id:'chatgpt-browser',type:'oauth',label:'Browser'}]};
+function settingsApi(handler) { return {scope: d=>'location='+encodeURIComponent(d),request:async (path,method='GET',body)=>{
+  if(handler) { const value=await handler(path,method,body);if(value!==undefined)return value; }
+  if(path.startsWith('/api/integration?'))return {data:[integration]};
+  if(path==='/api/session/active')return {data:{}};
+  if(path==='/api/form'||path==='/api/permission/request')return {data:[]};
+  if(path==='/client-settings/providers')return {data:[]};
+  return {};
+}}; }
+await test('provider catalog uses safe connections and does not fetch raw credentials', async()=>{
+  const calls=[];const store=new ProviderStore();store.attach(settingsApi((path)=>{calls.push(path);}),'/repo',async()=>{});await store.load();
+  assert.ok(!calls.includes('/api/credential'));assert.ok(!JSON.stringify(store.entries).includes('must-never-appear'));
+  assert.equal(store.entries[0].accounts[0].active,true);assert.equal(store.entries[0].methods[1].supported,false);
+});
+await test('native key connection sends V2 body once and clears the key',async()=>{
+  const posts=[];let changed=0;const store=new ProviderStore();store.attach(settingsApi((path,method,body)=>{if(method==='POST')posts.push({path,body});}),'/repo',async()=>{changed++;});
+  store.selected='deepseek';store.choose({id:'key',type:'key',supported:true,fields:[]});store.key=' fixture-key ';store.label='Work';await store.connect();
+  assert.equal(posts.length,1);assert.equal(posts[0].path,'/api/integration/deepseek/connect/key?location=%2Frepo');assert.equal(posts[0].body.key,'fixture-key');assert.equal(store.key,'');assert.equal(changed,1);
+});
+await test('active tasks prevent global credential writes',async()=>{
+  let posts=0;const store=new ProviderStore();store.attach(settingsApi((path,method)=>{if(method==='POST')posts++;if(path==='/api/session/active')return {data:{ses_a:{}}};}),'/repo',async()=>{});
+  store.selected='deepseek';store.choose({id:'key',type:'key',supported:true,fields:[]});store.key='fixture';await store.connect();assert.equal(posts,0);assert.match(store.error,/任务/);
+});
+await test('lost key-save response refreshes connections without automatically reposting',async()=>{
+  let posts=0;const store=new ProviderStore();store.attach(settingsApi((path,method)=>{if(method==='POST'){posts++;throw new Error('lost acknowledgement');}}),'/repo',async()=>{});
+  store.selected='deepseek';store.choose({id:'key',type:'key',supported:true,fields:[]});store.key='fixture';await store.connect();assert.equal(posts,1);assert.equal(store.entries.length,1);assert.equal(store.key,'');
+});
+await test('late OAuth creation after switching servers is cancelled on old server',async()=>{
+  let release,started;const gate=new Promise(resolve=>started=resolve);const oldCalls=[];
+  const store=new ProviderStore();store.attach(settingsApi((path,method)=>{oldCalls.push({path,method});if(path.includes('/connect/oauth')&&method==='POST'){started();return new Promise(resolve=>release=resolve);}}),'/old',async()=>{});
+  store.selected='openai';store.choose({id:'headless',type:'oauth',supported:true,fields:[]});const connecting=store.connect();await gate;
+  store.attach(settingsApi(),'/new',async()=>{});release({data:{attemptID:'attempt_old',url:'https://auth.example.com',mode:'auto'}});await connecting;
+  assert.equal(store.attemptID,'');assert.ok(oldCalls.some(c=>c.method==='DELETE'&&c.path.includes('attempt_old')));
+});
+await test('temporary OAuth polling failure keeps attempt and does not create another login',async()=>{
+  const store=new ProviderStore();store.attach(settingsApi(()=>{throw new Error('offline');}),'/repo',async()=>{});store.selected='openai';store.attemptID='same-attempt';store.authStatus='pending';
+  await store.poll();assert.equal(store.attemptID,'same-attempt');assert.match(store.error,/保留/);
+});
+await test('custom provider editing leaves saved API key absent from replacement request',async()=>{
+  const writes=[];const store=new ProviderStore();store.attach(settingsApi((path,method,body)=>{if(method==='PUT')writes.push(body);}),'/repo',async()=>{});
+  store.customAvailable=true;store.customID='mobile-test';store.customName='Test';store.customURL='https://api.example.com/v1';store.customModels='one,two';store.customKey='';await store.saveCustom();
+  assert.equal(writes.length,1);assert.equal(writes[0].apiKey,undefined);assert.deepEqual(Array.from(writes[0].models),['one','two']);
+});
+await test('older history stays bounded and late live messages do not evict the viewed page',async()=>{
+  const store=new AppStore();store.sessionID='ses_a';store.cursor='older';store.messages=Array.from({length:300},(_,i)=>message('old'+i,'old'));
+  store.api={messages:async()=>({data:[],cursor:{next:'more'}}),parseMessages:()=>[message('earliest','page')],interactions:async()=>[],request:async()=>({data:{}})};
+  await store.older();assert.equal(store.messages.length,300);assert.equal(store.messages[0].id,'earliest');assert.equal(store.readingHistory,true);
+  store.onFrame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'ses_a',assistantMessageID:'new-tail',ordinal:0,delta:'live'}})});
+  assert.equal(store.messages.length,300);assert.equal(store.messages[0].id,'earliest');assert.equal(store.newerAvailable,true);
+  store.api.parseMessages=()=>[message('latest','now')];await store.latest();assert.equal(store.readingHistory,false);assert.equal(store.messages[0].id,'latest');
+});
+await test('expired OAuth receipt refreshes safe accounts and stops polling without assuming success',async()=>{
+  const store=new ProviderStore();store.attach(settingsApi((path)=>{if(path.includes('/connect/oauth/'))throw new protocol.ApiError(404,'receipt expired');}),'/repo',async()=>{});
+  store.selected='deepseek';store.attemptID='expired';store.authStatus='pending';await store.poll();
+  assert.equal(store.attemptID,'');assert.equal(store.timer,-1);assert.equal(store.authStatus,'ended');assert.equal(store.entries.length,1);assert.match(store.notice,/核对/);
+});
+await test('temporary bridge failure preserves the last safe custom catalog',async()=>{
+  const store=new ProviderStore();store.attach(settingsApi((path)=>{if(path==='/client-settings/providers')throw new protocol.ApiError(503,'temporary');}),'/repo',async()=>{});
+  store.customAvailable=true;store.custom=[{id:'mobile-saved',name:'Saved',baseURL:'https://api.example.com',models:['one'],hasKey:true}];await store.load();
+  assert.equal(store.customAvailable,true);assert.equal(store.custom[0].id,'mobile-saved');assert.match(store.error,/暂时/);
+});
+await test('API24 account rename sends literal PATCH without depending on the API26 enum',async()=>{
+  const writes=[];const store=new ProviderStore();store.attach(settingsApi((path,method,body)=>{if(path.startsWith('/api/credential/'))writes.push({method,body});}),'/repo',async()=>{});
+  store.label='Renamed';await store.account({id:'cred_a',type:'credential'},'rename');assert.equal(writes.length,1);assert.equal(writes[0].method,'PATCH');assert.equal(writes[0].body.label,'Renamed');
 });
 console.log(count + ' adapter/state tests passed.');
