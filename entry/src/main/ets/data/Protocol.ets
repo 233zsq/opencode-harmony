@@ -3,7 +3,7 @@ import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { DEDICATED_CA, DEDICATED_SPKI } from './DedicatedTrust';
 import { ChatMessage, TextPart, ToolItem, SseParser, SseFrame, ServerConfig, ProjectItem, SessionItem,
-  ModelItem, Interaction, FormField, Choice, FileItem, DiffItem, FieldValue, FormCondition, FieldConstraints } from '../domain/Core';
+  ModelItem, Interaction, FormField, Choice, FileItem, DiffItem, FieldValue, FormCondition, FieldConstraints, ApprovalPreview, ApprovalFile, previewText } from '../domain/Core';
 
 export type Json = Record<string, Object>;
 export function object(value: Object | undefined | null): Json { return value ? value as Json : {}; }
@@ -34,6 +34,36 @@ export function parseFields(value: Object | undefined): FormField[] {
       pattern: string(f['pattern']), format: string(f['format']), url: string(f['url']) } as FieldConstraints });
 });
   return fields;
+}
+
+interface ApprovalPatchInput { file: string; patch: string; }
+
+export function parseApproval(request: Json): ApprovalPreview {
+  const metadata = object(request['metadata']); let incomplete = false;
+  const bounded = (value: string): string => { if (value.length > 12000) { incomplete = true; } return value.slice(0, 12000); };
+  let raw = list(metadata['files']);
+  const patch = string(metadata['patch'], string(metadata['diff']));
+  if (raw.length === 0 && patch) {
+    const candidate: ApprovalPatchInput = { file: string(metadata['file'], string(metadata['path'], string(list(request['resources'])[0], '文件修改'))), patch: patch };
+    raw = [candidate];
+  }
+  if (metadata['files'] !== undefined && !Array.isArray(metadata['files'])) { incomplete = true; }
+  const files: ApprovalFile[] = raw.slice(0, 20).map((value: Object): ApprovalFile => {
+    const file = object(value); const path = bounded(string(file['file'], string(file['path'])));
+    const preview = previewText(string(file['patch'], string(file['diff'])));
+    if (preview.truncated || !path) { incomplete = true; }
+    return { path: path || '未提供文件名', patch: preview.text, status: string(file['status'], 'modified'),
+      additions: typeof file['additions'] === 'number' ? Number(file['additions']) : 0,
+      deletions: typeof file['deletions'] === 'number' ? Number(file['deletions']) : 0 };
+  });
+  const command = bounded(string(metadata['command'])); const directory = bounded(string(metadata['workdir'], string(metadata['cwd'], string(metadata['root'], string(metadata['path'])))));
+  const pattern = bounded(string(metadata['pattern'])); const reason = bounded(string(request['message'], string(metadata['description'])));
+  const resources = list(request['resources']).map((v: Object): string => string(v)).join('\n');
+  if (raw.length > 20 || resources.length > 12000) { incomplete = true; }
+  return { command: command, directory: directory, pattern: pattern, reason: reason,
+    source: string(object(request['source'])['type']) === 'tool' ? 'Agent 工具' : '服务器请求',
+    files: files, omittedFiles: Math.max(0, raw.length - files.length), incomplete: incomplete,
+    expectsDiff: /edit|write|patch/.test(string(request['action'])) };
 }
 
 export class ApiError extends Error {
@@ -140,15 +170,15 @@ export class Protocol {
         parts: parts, tools: tools, state: m['finish'] === 'error' ? 'failed' : object(m['time'])['completed'] ? 'completed' : 'streaming' };
     }).filter((m: ChatMessage) => m.id.length > 0 && m.role !== 'idle');
   }
-  async interactions(sessionID: string, kind: string): Promise<Interaction[]> {
+  async interactions(sessionID: string, kind: string, directory: string = ''): Promise<Interaction[]> {
     const path = '/api/session/' + encodeURIComponent(sessionID) + (kind === 'form' ? '/form' : '/permission');
-    return rows(await this.request(path)).map((v: Object): Interaction => {
+    return rows(await this.request(path + (directory ? '?' + this.scope(directory) : ''))).map((v: Object): Interaction => {
       const p = object(v);
       const fields = parseFields(p['fields']);
       return { id: string(p['id']), sessionID: sessionID, kind: kind,
         title: string(p['title'], string(p['action'], '操作审批')),
-        detail: kind === 'form' ? string(p['description']) : list(p['resources']).map((r: Object) => string(r)).join('\n'),
-        fields: fields, state: 'pending' };
+        detail: kind === 'form' ? string(p['description']) : list(p['resources']).map((r: Object) => string(r)).join('\n').slice(0, 12000),
+        fields: fields, state: 'pending', approval: kind === 'form' ? undefined : parseApproval(p) };
     });
   }
   async files(directory: string, path: string): Promise<FileItem[]> {

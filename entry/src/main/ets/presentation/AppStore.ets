@@ -4,7 +4,7 @@ import { Storage } from '../data/Storage';
 import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
-  DiffItem, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText } from '../domain/Core';
+  DiffItem, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
 
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
@@ -33,6 +33,8 @@ export class AppStore {
   modelID: string = '';
   messages: ChatMessage[] = [];
   interactions: Interaction[] = [];
+  permissionError: string = '';
+  private permissionEpoch: number = 0;
   files: FileItem[] = [];
   diffs: DiffItem[] = [];
   filePath: string = '';
@@ -108,7 +110,7 @@ export class AppStore {
   disconnect(): void {
     this.providers.attach(undefined, '', async (): Promise<void> => {});
     this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接';
-    this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = [];
+    this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
     this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false;
     this.pendingSend = undefined; this.draft = ''; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false;
@@ -209,7 +211,7 @@ export class AppStore {
     if (!this.api || !directory.trim()) { return; }
     this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
     this.providers.attach(api, directory.trim(), async (): Promise<void> => { await this.refreshModels(); });
-    this.pendingSend = undefined; this.draft = ''; this.directory = directory.trim(); this.sessionID = ''; this.messages = []; this.interactions = []; this.diffs = [];
+    this.pendingSend = undefined; this.draft = ''; this.directory = directory.trim(); this.sessionID = ''; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
     this.fileContent = ''; this.filePath = ''; this.cursor = ''; this.error = ''; this.busy = true; this.syncing = false;
     try {
       await api.request('/api/location?' + api.scope(this.directory));
@@ -240,7 +242,7 @@ export class AppStore {
     this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model;
-    this.messages = []; this.interactions = []; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
+    this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
     this.draft = ''; this.working = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); await this.sync();
   }
   async sync(): Promise<void> {
@@ -292,16 +294,30 @@ export class AppStore {
     }
   }
   private async syncInteractions(api: Protocol, id: string, kind: string, generation: number): Promise<void> {
+    const epoch = kind === 'permission' ? ++this.permissionEpoch : 0;
     try {
-      const incoming = await api.interactions(id, kind);
-      if (generation !== this.generation) { return; }
-      const next = incoming.map((item: Interaction) => {
+      const incoming = await api.interactions(id, kind, this.directory);
+      if (generation !== this.generation || (kind === 'permission' && epoch !== this.permissionEpoch)) { return; }
+      const next = incoming.map((item: Interaction): Interaction => {
         const old = this.interactions.find((p: Interaction) => p.id === item.id);
-        return old ? { id: old.id, sessionID: old.sessionID, kind: old.kind, title: old.title, detail: old.detail,
-          fields: mergeFormDraft(item.fields, old.fields), state: old.state === 'submitting' ? 'submitting' : 'pending' } as Interaction : item;
+        return old ? { id: item.id, sessionID: item.sessionID, kind: item.kind, title: item.title, detail: item.detail, approval: item.approval,
+          fields: mergeFormDraft(item.fields, old.fields), state: old.state === 'submitting' ? 'submitting' : 'pending' } : item;
       });
       this.interactions = this.interactions.filter((p: Interaction) => p.kind !== kind).concat(next);
-    } catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
+      if (kind === 'permission') { this.permissionError = ''; }
+    } catch (e) {
+      if (generation === this.generation && (kind !== 'permission' || epoch === this.permissionEpoch)) {
+        if (kind === 'permission') { this.permissionError = '审批列表读取失败，已保留上次结果。请重新读取后再批准；仍可拒绝已显示的请求。'; }
+        else { this.fail(e as Error); }
+      }
+    }
+  }
+  async retryPermissions(): Promise<void> {
+    if (this.api && this.sessionID) { await this.syncInteractions(this.api, this.sessionID, 'permission', this.generation); }
+  }
+  canApprove(id: string): boolean {
+    const item = this.interactions.find((p: Interaction) => p.id === id);
+    return item !== undefined && !this.permissionError && item.state !== 'submitting' && item.approval?.incomplete !== true;
   }
   async older(): Promise<void> {
     if (!this.api || !this.cursor || this.busy) { return; }
@@ -371,12 +387,12 @@ export class AppStore {
         if (f.key !== key) { return f; }
         return updateFieldValue(f, value, multiple);
       });
-      return { id: p.id, sessionID: p.sessionID, kind: p.kind, title: p.title, detail: p.detail, fields: fields, state: 'pending' };
+      return { id: p.id, sessionID: p.sessionID, kind: p.kind, title: p.title, detail: p.detail, fields: fields, approval: p.approval, state: 'pending' };
     });
   }
   private interactionState(id: string, state: string): void {
     this.interactions = this.interactions.map((p: Interaction): Interaction => ({
-      id: p.id, sessionID: p.sessionID, kind: p.kind, title: p.title, detail: p.detail, fields: p.fields, state: p.id === id ? state : p.state
+      id: p.id, sessionID: p.sessionID, kind: p.kind, title: p.title, detail: p.detail, fields: p.fields, approval: p.approval, state: p.id === id ? state : p.state
     }));
   }
   currentFields(id: string): FormField[] { return this.interactions.find((p: Interaction) => p.id === id)?.fields || []; }
@@ -385,23 +401,38 @@ export class AppStore {
   selected(id: string, key: string, value: string): boolean { return (this.currentFields(id).find((f: FormField) => f.key === key)?.values || []).indexOf(value) >= 0; }
   async reply(request: Interaction, reject: boolean = false): Promise<void> {
     const item = this.interactions.find((p: Interaction) => p.id === request.id);
-    if (!item) { return; }
-    if (!this.api || item.state === 'submitting') { return; }
+    if (!item || !this.api || item.state === 'submitting') { return; }
+    if (item.kind === 'permission' && !reject && !this.canApprove(item.id)) { this.error = this.permissionError || '无法完整预览此操作，请在桌面核对后处理。'; return; }
+    if (item.kind === 'permission' && !reject && interactionSnapshot(request) !== interactionSnapshot(item)) { this.error = '操作内容已更新，请重新核对当前预览。'; return; }
     let answer: Record<string, FieldValue> = {};
     if (item.kind === 'form' && !reject) { try { answer = buildFormAnswer(item.fields); } catch (e) { this.fail(e as Error); return; } }
-    const generation = this.generation; this.interactionState(item.id, 'submitting'); this.error = '';
-    const base = this.sessionPath() + (item.kind === 'form' ? '/form/' : '/permission/') + encodeURIComponent(item.id);
+    const generation = this.generation; const api = this.api; const id = this.sessionID; const directory = this.directory;
+    const reviewed = interactionSnapshot(item); this.interactionState(item.id, 'submitting'); this.error = '';
+    const base = '/api/session/' + encodeURIComponent(id) + (item.kind === 'form' ? '/form/' : '/permission/') + encodeURIComponent(item.id);
+    const scope = directory ? '?' + api.scope(directory) : '';
     try {
-      if (item.kind === 'form' && reject) { await this.api.request(base, http.RequestMethod.DELETE); }
-      else { await this.api.request(base + '/reply', http.RequestMethod.POST,
-        item.kind === 'form' ? { answer: answer } as AnswerRequest : { decision: reject ? 'reject' : 'once' } as PermissionReply); }
-      if (generation === this.generation) {
-        this.interactions = this.interactions.filter((p: Interaction) => p.id !== item.id); await this.sync();
+      if (item.kind === 'permission' && !reject) {
+        const epoch = ++this.permissionEpoch;
+        const snapshot = await api.interactions(id, 'permission', directory);
+        if (generation !== this.generation) { return; }
+        if (epoch !== this.permissionEpoch) { this.interactionState(item.id, 'pending'); this.error = '审批状态已更新，请重新核对。'; return; }
+        const current = snapshot.find((p: Interaction) => p.id === item.id);
+        if (!current) { this.interactions = this.interactions.filter((p: Interaction) => p.id !== item.id); this.error = '该请求已处理，无需再次批准。'; return; }
+        if (interactionSnapshot(current) !== reviewed || current.approval?.incomplete) {
+          this.interactions = this.interactions.filter((p: Interaction) => p.kind !== 'permission').concat(snapshot);
+          this.error = '操作内容已更新，请核对最新预览后再批准。'; return;
+        }
+        this.permissionError = '';
       }
+      if (item.kind === 'form' && reject) { await api.request(base + scope, http.RequestMethod.DELETE); }
+      else { await api.request(base + '/reply' + scope, http.RequestMethod.POST,
+        item.kind === 'form' ? { answer: answer } as AnswerRequest : { decision: reject ? 'reject' : 'once' } as PermissionReply); }
+      if (generation === this.generation) { this.interactions = this.interactions.filter((p: Interaction) => p.id !== item.id); await this.sync(); }
     } catch (e) {
       if (generation === this.generation) {
         this.fail(e as Error); this.interactionState(item.id, 'error');
-        await this.syncInteractions(this.api, this.sessionID, item.kind, generation);
+        if (item.kind === 'permission') { this.permissionError = '审批结果未确认，请重新读取状态；不会自动重复批准。'; }
+        await this.syncInteractions(api, id, item.kind, generation);
       }
     }
   }

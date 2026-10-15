@@ -10,6 +10,7 @@ const forms = [];
 const permissions = [];
 const receipts = [];
 const prompts = new Map();
+let permissionReadFailure = false;
 let active = false;
 let sequence = 0;
 let model = { id: 'fixture-coder', providerID: 'fixture' };
@@ -34,7 +35,7 @@ const form = () => ({
   ]
 });
 const permission = () => ({ id: 'per_fixture', sessionID: session.id, action: 'edit_file',
-  resources: ['src/example.ets'], save: ['src/*'], source: { type: 'tool', messageID: 'msg_fixture', id: 'call_fixture' } });
+  resources: ['src/example.ets'], metadata: { workdir: directory, files: [{ file: 'src/example.ets', additions: 1, deletions: 1, patch: '--- a/src/example.ets\n+++ b/src/example.ets\n@@ -1 +1 @@\n-const platform = "HarmonyOS";\n+const platform = "HarmonyOS NEXT";\n' }] }, save: ['src/*'], source: { type: 'tool', messageID: 'msg_fixture', id: 'call_fixture' } });
 
 async function runPrompt(text) {
   active = true;
@@ -69,6 +70,8 @@ async function runPrompt(text) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const path = url.pathname;
+  if (path === '/__test/permission-read-failure' && req.method === 'POST') { permissionReadFailure = url.searchParams.get('enabled') === '1'; return send(res, { permissionReadFailure }); }
+  if (path === '/__test/approval' && req.method === 'POST') { if (!permissions.length) permissions.push(permission()); event('permission.asked', permissions[0]); return send(res, { created: true }); }
   if (path === '/__test/state') return send(res, { receipts, messages: messages.length, forms, permissions, streams: streams.size });
   if (path === '/__test/disconnect') {
     for (const stream of streams) stream.end();
@@ -82,7 +85,7 @@ const server = http.createServer(async (req, res) => {
   for await (const chunk of req) body += chunk;
   let input = {};
   try { input = body ? JSON.parse(body) : {}; } catch { return send(res, { error: 'Invalid JSON' }, 400); }
-  if (req.method !== 'GET') receipts.push({ method: req.method, path, input });
+  if (req.method !== 'GET') receipts.push({ method: req.method, path, query: url.search, input });
   if (path === '/api/info') return send(res, { version: '2.0.29', pid: process.pid, urls: [], paths: { tmp: '/tmp' } });
   if (path === '/api/project') return send(res, [{ id: 'prj_fixture', canonical: directory, name: 'Harmony Fixture', sandboxes: [], time: {} }]);
   if (path === '/api/location') return send(res, { directory, project: { id: 'prj_fixture', directory, canonical: directory } });
@@ -106,7 +109,7 @@ const server = http.createServer(async (req, res) => {
   if (path.endsWith('/model')) { model = input.model; session.model = model; return send(res, {}, 204); }
   if (path.endsWith('/interrupt')) { active = false; return send(res, { interrupted: true }); }
   if (path.endsWith('/form')) return send(res, { data: forms });
-  if (path.endsWith('/permission')) return send(res, { data: permissions });
+  if (path.endsWith('/permission')) return permissionReadFailure ? send(res, { error: 'Controlled approval read failure' }, 400) : send(res, { data: permissions });
   if (path.includes('/form/') && path.endsWith('/reply')) {
     if (!Array.isArray(input.answer?.areas) || !input.answer?.approach) return send(res, { error: 'Invalid answer' }, 400);
     forms.splice(0);

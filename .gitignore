@@ -21,3 +21,6 @@
 .env.*
 server.env
 *.log
+
+# Python test/compiler cache
+__pycache__/

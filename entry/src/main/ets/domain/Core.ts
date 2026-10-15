@@ -55,9 +55,14 @@ export interface FormField {
   key: string; label: string; type: string; required: boolean; options: Choice[];
   values: string[]; text: string; constraints?: FieldConstraints;
 }
+export interface ApprovalFile { path: string; patch: string; status: string; additions: number; deletions: number; }
+export interface ApprovalPreview {
+  command: string; directory: string; pattern: string; reason: string; source: string;
+  files: ApprovalFile[]; omittedFiles: number; incomplete: boolean; expectsDiff: boolean;
+}
 export interface Interaction {
   id: string; sessionID: string; kind: string; title: string; detail: string;
-  fields: FormField[]; state: string;
+  fields: FormField[]; state: string; approval?: ApprovalPreview;
 }
 export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; useDedicatedTrust?: boolean; preferredModel?: string; }
 export interface ProjectItem { id: string; name: string; directory: string; }
@@ -254,4 +259,13 @@ export function mergeFormDraft(incoming: FormField[], previous: FormField[]): Fo
     const old = previous.find(item => item.key === field.key && item.type === field.type);
     return old ? { ...field, values: old.values, text: old.text } : field;
   });
+}
+
+export function interactionSnapshot(item: Interaction): string {
+  return JSON.stringify([item.id, item.sessionID, item.kind, item.title, item.detail, item.approval || null]);
+}
+export function interactionKey(item: Interaction): string {
+  const text = interactionSnapshot(item);
+  let hash = 2166136261; for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+  return item.id + ':' + (hash >>> 0);
 }

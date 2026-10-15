@@ -65,4 +65,4 @@ App 地址填写 `https://<SERVER_IP>:9443`，用户名 `opencode`，使用本�
 
 scripts/deploy-settings.sh 用于首次安装，会拒绝覆盖已存在服务。更新需先核验并运行 tests/mobile_settings_test.py，再只替换本服务代码并重启 opencode-harmony-settings.service；不必重启Agent。测试使用临时目录和测试凭据，不修改真实配置。
 
-OpenCode v2.0.29在某些 glob/read 工具的可选 path 未提供时，将审批 metadata.path 编码为undefined，读取待批列表会返回400。真实验收采用只对 edit 请求审批的会话规则；该服务端问题未在客户端修复，也未擅自升级现有实例。手机仍保留上次成功读取的待办，不将失败读取当成空列表。
+本实例已通过官方permission evaluate hook修复v2.0.29可选metadata.path为undefined时的审批列表400，仅规范化元数据，不放宽权限。无需二进制升级或共享服务变更。手机失败时保留上次待办并暂停批准，恢复后批准前再核对。插件部署、回滚和验证见 [APPROVALS.md](APPROVALS.md)。

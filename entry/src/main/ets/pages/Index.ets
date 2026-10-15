@@ -1,11 +1,12 @@
 import { common } from '@kit.AbilityKit';
 import { AppStore } from '../presentation/AppStore';
 import { MarkdownText } from '../components/MarkdownText';
+import { ApprovalPreviewView } from '../components/ApprovalPreview';
 import { ProviderSettings } from '../components/ProviderSettings';
 import { FormFieldsView } from '../components/FormFieldsView';
 import { MessageDataSource } from '../presentation/MessageDataSource';
 import { ServerConfig, ProjectItem, SessionItem, ChatMessage, ToolItem, Interaction, FormField, Choice,
-  ModelItem, FileItem, DiffItem, DiffLine, parseDiff, visibleFormFields, messageKey } from '../domain/Core';
+  ModelItem, FileItem, DiffItem, DiffLine, parseDiff, visibleFormFields, messageKey, interactionKey } from '../domain/Core';
 
 @Entry
 @Component
@@ -190,18 +191,21 @@ struct Index {
       }.width('100%')
       Text(item.title).fontSize(17).fontWeight(FontWeight.Bold).fontColor('#514C2F').width('100%')
       if (item.detail) { Text(item.detail).fontSize(12).fontFamily('monospace').fontColor('#7A765E').copyOption(CopyOptions.InApp).width('100%') }
+      if (item.kind === 'permission' && item.approval) {
+        ApprovalPreviewView({ preview: item.approval, onReview: (): void => { this.follow = false; } })
+      }
       FormFieldsView({ fields: this.store.currentFields(item.id),
         onChange: (key: string, value: string, multiple: boolean): void => { this.store.updateField(item.id, key, value, multiple); },
         onOpenLink: (url: string): void => { this.openLink(url); } }).enabled(this.store.itemState(item.id) !== 'submitting')
       Row({ space: 10 }) {
-        Button(item.kind === 'form' ? '提交回答' : '批准一次', { type: ButtonType.Normal })
+        Button(item.kind === 'form' ? '提交回答' : '批准一次', { type: ButtonType.Normal }).id('interaction-submit-' + item.id)
           .backgroundColor('#215D43').fontColor(Color.White).borderRadius(9).layoutWeight(1)
-          .enabled(this.store.itemState(item.id) !== 'submitting').onClick(() => { this.store.reply(item); })
-        Button(item.kind === 'form' ? '取消' : '拒绝', { type: ButtonType.Normal })
+          .enabled(this.store.itemState(item.id) !== 'submitting' && (item.kind === 'form' || this.store.canApprove(item.id))).onClick(() => { this.store.reply(item); })
+        Button(item.kind === 'form' ? '取消' : '拒绝', { type: ButtonType.Normal }).id('interaction-reject-' + item.id)
           .backgroundColor('#EDE7D4').fontColor('#8D6647').borderRadius(9)
           .enabled(this.store.itemState(item.id) !== 'submitting').onClick(() => { this.store.reply(item, true); })
       }.width('100%')
-    }.padding(16).backgroundColor('#FFFBEF').borderRadius(14).width('100%')
+    }.id('interaction-card-' + item.id).padding(16).backgroundColor('#FFFBEF').borderRadius(14).width('100%')
   }
 
   @Builder
@@ -222,6 +226,13 @@ struct Index {
             .borderRadius(8).onClick(() => { this.store.sync(); })
         }.width('100%')
       }.padding({ left: 20, right: 20, top: 14, bottom: 12 }).width('100%')
+      if (this.store.permissionError) {
+        Row({ space: 8 }) {
+          Text(this.store.permissionError).id('permission-sync-error').fontSize(12).fontColor('#965C40').layoutWeight(1)
+          Button('重新读取审批', { type: ButtonType.Normal }).id('permission-retry').fontSize(11).backgroundColor('#EDE5D3').fontColor('#785C39')
+            .onClick(() => { this.store.retryPermissions(); })
+        }.padding(12).width('100%')
+      }
       List({ space: 12, scroller: this.scroller }) {
         if (this.store.cursor) {
           ListItem() {
@@ -243,7 +254,7 @@ struct Index {
         }, (message: ChatMessage) => messageKey(message))
         ForEach(this.store.interactions, (item: Interaction) => {
           ListItem() { this.interactionCard(item) }
-        }, (item: Interaction) => item.id)
+        }, (item: Interaction) => interactionKey(item))
       }.padding({ left: 16, right: 16 }).layoutWeight(1).scrollBar(BarState.Off)
         .onScrollFrameBegin((offset: number, state: ScrollState) => {
           if (state === ScrollState.Scroll && offset < 0) { this.follow = false; }

@@ -251,4 +251,48 @@ await test('API24 account rename sends literal PATCH without depending on the AP
   const writes=[];const store=new ProviderStore();store.attach(settingsApi((path,method,body)=>{if(path.startsWith('/api/credential/'))writes.push({method,body});}),'/repo',async()=>{});
   store.label='Renamed';await store.account({id:'cred_a',type:'credential'},'rename');assert.equal(writes.length,1);assert.equal(writes[0].method,'PATCH');assert.equal(writes[0].body.label,'Renamed');
 });
+const permission = (patch='@@ -1 +1 @@\n-old\n+new\n') => ({id:'per_a',sessionID:'ses_a',kind:'permission',title:'edit',detail:'src/a.ts',fields:[],state:'pending',approval:protocol.parseApproval({action:'edit',resources:['src/a.ts'],metadata:{files:[{file:'src/a.ts',patch,status:'modified',additions:1,deletions:1}]},source:{type:'tool'}})});
+await test('pending approval preview comes from request metadata rather than working tree diff',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'opencode'},'');let path;api.request=async p=>{path=p;return{data:[{id:'per_a',action:'edit',resources:['src/a.ts'],metadata:{files:[{file:'src/a.ts',patch:'-old\n+planned',status:'modified',additions:1,deletions:1}]},source:{type:'tool'}}]};};
+ const p=(await api.interactions('ses_a','permission','/repo'))[0];assert.equal(p.approval.files[0].patch,'-old\n+planned');assert.equal(p.approval.source,'Agent 工具');assert.match(path,/location%5Bdirectory%5D=%2Frepo/);
+});
+await test('oversized approval previews explicitly block approval',async()=>{
+ const parsed=protocol.parseApproval({action:'edit',resources:['a'],metadata:{files:[{file:'a',patch:'line\n'.repeat(1600)}]}});assert.equal(parsed.incomplete,true);const store=new AppStore();store.interactions=[{...permission(),approval:parsed}];assert.equal(store.canApprove('per_a'),false);
+ const many=protocol.parseApproval({action:'edit',metadata:{files:Array.from({length:21},(_,i)=>({file:String(i),patch:'diff'}))}});assert.equal(many.omittedFiles,1);assert.equal(many.incomplete,true);
+});
+await test('preview metadata survives polling and submission-state changes',async()=>{
+ const store=new AppStore();const before=permission();store.interactions=[before];store.interactionState(before.id,'submitting');assert.equal(store.interactions[0].approval,before.approval);
+ await store.syncInteractions({interactions:async()=>[{...permission('updated'),title:'New scope',detail:'src/b.ts'}]},'ses_a','permission',0);assert.equal(store.interactions[0].title,'New scope');assert.equal(store.interactions[0].approval.files[0].patch,'updated');assert.equal(store.interactions[0].state,'submitting');
+});
+await test('failed approval read keeps cards and disables approve but permits rejection',async()=>{
+ const store=new AppStore();store.active=false;store.sessionID='ses_a';store.interactions=[permission()];let posts=0;store.api={request:async()=>{posts++;},interactions:async()=>{throw new protocol.ApiError(400,'invalid metadata');}};
+ await store.retryPermissions();assert.equal(store.interactions.length,1);assert.equal(store.error,'');assert.equal(store.canApprove('per_a'),false);await store.reply(store.interactions[0]);assert.equal(posts,0);await store.reply(store.interactions[0],true);assert.equal(posts,1);assert.equal(store.interactions.length,0);
+});
+await test('successful retry clears approval-read failure without losing pending preview',async()=>{
+ const store=new AppStore();store.sessionID='ses_a';store.interactions=[permission()];store.permissionError='offline';store.api={interactions:async()=>[permission()]};await store.retryPermissions();assert.equal(store.permissionError,'');assert.equal(store.canApprove('per_a'),true);assert.equal(store.interactions[0].approval.files[0].path,'src/a.ts');
+});
+await test('approve rechecks exact current preview and sends once with directory scope',async()=>{
+ const store=new AppStore();store.active=false;store.sessionID='ses_a';store.directory='/repo';store.interactions=[permission()];const calls=[];store.api={scope:d=>'location%5Bdirectory%5D='+encodeURIComponent(d),interactions:async()=>[permission()],request:async(path,method,body)=>calls.push({path,body})};await store.reply(store.interactions[0]);assert.equal(calls.length,1);assert.equal(calls[0].body.decision,'once');assert.match(calls[0].path,/reply\?location%5Bdirectory%5D=%2Frepo$/);assert.equal(store.interactions.length,0);
+});
+await test('changed or already handled approvals are never automatically approved',async()=>{
+ for(const snapshot of [[permission('changed')],[]]){const store=new AppStore();store.active=false;store.sessionID='ses_a';store.interactions=[permission()];let posts=0;store.api={interactions:async()=>snapshot,request:async()=>{posts++;}};await store.reply(store.interactions[0]);assert.equal(posts,0);assert.equal(store.interactions.length,snapshot.length);assert.ok(store.error);}
+});
+await test('stale rendered card cannot approve a newer stored request',async()=>{
+ const store=new AppStore();store.active=false;store.sessionID='ses_a';const displayed=permission('old');store.interactions=[permission('new')];let calls=0;store.api={request:async()=>{calls++;}};await store.reply(displayed);assert.equal(calls,0);assert.match(store.error,/更新/);
+});
+await test('lost approval acknowledgement refreshes state without duplicate POST',async()=>{
+ const store=new AppStore();store.active=false;store.sessionID='ses_a';store.interactions=[permission()];let reads=0,posts=0;store.api={interactions:async()=>++reads===1?[permission()]:[],request:async()=>{posts++;throw new Error('lost acknowledgement');}};await store.reply(store.interactions[0]);assert.equal(posts,1);assert.equal(reads,2);assert.equal(store.interactions.length,0);
+});
+await test('late approval check cannot post after switching connections',async()=>{
+ const store=new AppStore();store.active=false;store.sessionID='ses_a';store.interactions=[permission()];let release,posts=0;store.api={interactions:()=>new Promise(r=>release=r),request:async()=>{posts++;}};const pending=store.reply(store.interactions[0]);store.disconnect();release([permission()]);await pending;assert.equal(posts,0);assert.equal(store.interactions.length,0);
+});
+await test('older failing approval poll cannot overwrite a newer successful snapshot',async()=>{
+ const store=new AppStore();store.interactions=[permission()];let reject;const older=store.syncInteractions({interactions:()=>new Promise((_,r)=>reject=r)},'ses_a','permission',0);await store.syncInteractions({interactions:async()=>[]},'ses_a','permission',0);reject(new Error('older failure'));await older;assert.equal(store.permissionError,'');assert.equal(store.interactions.length,0);
+});
+await test('changing session or project clears the old approval read failure',async()=>{
+ const store=new AppStore();store.permissionError='old session failure';store.api={};store.openStream=()=>{};store.sync=async()=>{};
+ await store.openSession({id:'ses_b',title:'B',model:''});assert.equal(store.permissionError,'');
+ store.permissionError='old project failure';store.api={request:async()=>({}),sessions:async()=>[],models:async()=>[]};
+ await store.selectProject('/repo-b');assert.equal(store.permissionError,'');assert.equal(store.interactions.length,0);
+});
 console.log(count + ' adapter/state tests passed.');
