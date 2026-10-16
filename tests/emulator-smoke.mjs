@@ -13,19 +13,21 @@ function layout() {
   command('file', 'recv', '/data/local/tmp/opencode-smoke.json', resolve(dir, 'smoke-layout.json'));
   return nodes(JSON.parse(readFileSync(resolve(dir, 'smoke-layout.json'), 'utf8')));
 }
+const aliases={'open-menu':'__NavigationField__NavigationMenu__MenuItem2__native-navigation','menu-projects':'项目与会话','menu-review':'代码审查','menu-settings':'模型与接入','menu-connections':'服务器连接','menu-sync':'同步当前对话','appearance-menu':'外观'};
 function match(query) {
-  const item = layout().find(n => n.id === query || n.text === query);
+  const item = layout().find(n => n.id === query || n.text === query || (aliases[query] && (n.id === aliases[query] || n.text === aliases[query])) || (query === 'back-chat' && n.id === 'native-destination'));
   if (!item) throw new Error('UI control not found: ' + query);
   const a = item.bounds.match(/\d+/g).map(Number);
   return { x: Math.round((a[0] + a[2]) / 2), y: Math.round((a[1] + a[3]) / 2), item };
 }
 async function click(query) {
+  if(query==='back-chat'){command('shell','uitest uiInput keyEvent Back');await pause(550);return;}
   const target={连接:'menu-connections',项目:'menu-projects',审查:'menu-review',设置:'menu-settings'}[query];
   if(target){
-    if(!layout().some(n=>n.id==='open-menu')&&layout().some(n=>n.id==='back-chat'))await click('back-chat');
-    if(layout().some(n=>n.id==='open-menu')){await click('open-menu');await click(target);return;}
+    if(!layout().some(n=>n.id==='__NavigationField__NavigationMenu__MenuItem2__native-navigation')&&layout().some(n=>n.id==='native-destination'))await click('back-chat');
+    if(layout().some(n=>n.id==='__NavigationField__NavigationMenu__MenuItem2__native-navigation')){await click('open-menu');await click(target);return;}
   }
-  if(query==='聊天'&&layout().some(n=>n.id==='back-chat')){await click('back-chat');return;}
+  if(query==='聊天'&&layout().some(n=>n.id==='native-destination')){await click('back-chat');return;}
   const { x, y } = match(query); command('shell', 'uitest uiInput click ' + x + ' ' + y); await pause(300);
 }
 async function input(query, text) {

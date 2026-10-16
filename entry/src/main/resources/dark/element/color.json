@@ -1,8 +1,96 @@
 {
   "color": [
     {
+      "name": "ui_page",
+      "value": "#101114"
+    },
+    {
+      "name": "ui_surface",
+      "value": "#1C1E22"
+    },
+    {
+      "name": "ui_field",
+      "value": "#282B31"
+    },
+    {
+      "name": "ui_sidebar",
+      "value": "#171B22"
+    },
+    {
+      "name": "ui_text",
+      "value": "#F0F2F6"
+    },
+    {
+      "name": "ui_secondary",
+      "value": "#B4BECE"
+    },
+    {
+      "name": "ui_muted",
+      "value": "#828C9D"
+    },
+    {
+      "name": "ui_accent",
+      "value": "#6B9FFF"
+    },
+    {
+      "name": "ui_accent_soft",
+      "value": "#243B63"
+    },
+    {
+      "name": "ui_separator",
+      "value": "#343943"
+    },
+    {
+      "name": "ui_bubble",
+      "value": "#2B3443"
+    },
+    {
+      "name": "ui_warning",
+      "value": "#E4BB69"
+    },
+    {
+      "name": "ui_warning_bg",
+      "value": "#322A1A"
+    },
+    {
+      "name": "ui_danger",
+      "value": "#FF9696"
+    },
+    {
+      "name": "ui_danger_bg",
+      "value": "#412528"
+    },
+    {
+      "name": "ui_added",
+      "value": "#1D3529"
+    },
+    {
+      "name": "ui_added_text",
+      "value": "#8BDBAC"
+    },
+    {
+      "name": "ui_removed",
+      "value": "#3E242B"
+    },
+    {
+      "name": "ui_removed_text",
+      "value": "#FFA2AE"
+    },
+    {
+      "name": "ui_code_bg",
+      "value": "#131922"
+    },
+    {
+      "name": "ui_code_text",
+      "value": "#E1E9F6"
+    },
+    {
       "name": "start_window_background",
-      "value": "#000000"
+      "value": "#101114"
+    },
+    {
+      "name": "ui_on_accent",
+      "value": "#071A37"
     }
   ]
 }
