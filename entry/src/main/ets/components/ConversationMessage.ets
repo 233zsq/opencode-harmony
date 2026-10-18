@@ -14,6 +14,22 @@ export struct ConversationMessage {
   private reasoningScroller: Scroller = new Scroller();
   @Builder
   copyMenu() { Menu() { MenuItem({ content: '复制消息' }).onClick(() => { this.onCopy(this.message.text); }) } }
+  private label(tool: ToolItem): string {
+    switch (tool.name) {
+      case 'read': case 'read_file': return '读取文件';
+      case 'edit': case 'edit_file': return '修改文件';
+      case 'write': return '写入文件';
+      case 'bash': return '执行命令';
+      case 'glob': return '搜索文件';
+      case 'grep': return '检索内容';
+      case 'task': return '子任务';
+      default: return tool.name;
+    }
+  }
+  private summary(tool: ToolItem): string {
+    const value = toolSummary(tool);
+    return value.startsWith('/') || /^[A-Za-z]:/.test(value) ? value.split(/[\\/]/).slice(-2).join('/') : value;
+  }
   build() {
     if (this.message.role === 'user') {
       Row() {
@@ -21,18 +37,18 @@ export struct ConversationMessage {
         Text(this.message.text).id('message-user-' + this.message.id).fontSize(15).lineHeight(25).fontColor(C.text)
           .padding({ left: 18, right: 18, top: 12, bottom: 12 }).backgroundColor(C.bubble).borderRadius(20)
           .constraintSize({ maxWidth: '88%' }).copyOption(CopyOptions.InApp)
-      }.width('100%').margin({ top: 6, bottom: 14 }).bindContextMenu(this.copyMenu(), ResponseType.LongPress)
+      }.width('100%').margin({ top: 12, bottom: 12 }).bindContextMenu(this.copyMenu(), ResponseType.LongPress)
     } else if (this.message.role !== 'assistant') {
       Text(this.message.text).fontSize(11).fontColor(C.muted).width('100%').textAlign(TextAlign.Center).padding(8)
     } else {
-      Column({ space: 15 }) {
+      Column({ space: 8 }) {
         if (this.message.reasoning) {
           Column({ space: 0 }) {
             Row({ space: 9 }) {
-              SymbolGlyph($r('sys.symbol.lightbulb')).fontSize(18).fontColor([C.secondary])
-              Text(this.thinking ? '正在思考' : '思考已完成').fontSize(13).fontColor(C.secondary).layoutWeight(1)
+              SymbolGlyph($r('sys.symbol.lightbulb')).fontSize(16).fontColor([C.secondary])
+              Text(this.thinking ? '正在思考' : '思考已完成').fontSize(12).fontColor(C.secondary).layoutWeight(1)
               SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted]).rotate({ angle: this.reasoningExpanded ? 90 : 0 })
-            }.id('reasoning-toggle-' + this.message.id).width('100%').padding(12)
+            }.id('reasoning-toggle-' + this.message.id).width('100%').height(36).padding({ left: 10, right: 10 })
               .onClick(() => { this.onToggleReasoning(); })
             if (this.reasoningExpanded) {
               Scroll(this.reasoningScroller) {
@@ -46,29 +62,28 @@ export struct ConversationMessage {
                 Text(this.thinking ? '显示最近的思考内容' : '较长内容已截断，完整记录保留在服务器').fontSize(10).fontColor(C.muted).padding(8)
               }
             }
-          }.width('100%').border({ width: 1, color: C.separator }).borderRadius(12)
+          }.width('100%').border({ width: 1, color: C.separator }).borderRadius(10)
         }
         if (this.message.text) { MarkdownText({ content: this.message.text, onOpenLink: this.onOpenLink, onCopy: this.onCopy }) }
         if (this.message.tools.length) {
           Column({ space: 0 }) {
-            ForEach(this.message.tools, (tool: ToolItem) => {
-              Row({ space: 9 }) {
-                SymbolGlyph(tool.status === 'error' || tool.status === 'failed' ? $r('sys.symbol.exclamationmark_circle') : $r('sys.symbol.code_square')).fontSize(18).fontColor([tool.status === 'error' || tool.status === 'failed' ? C.danger : C.secondary])
-                Column({ space: 3 }) {
-                  Text(tool.name).fontSize(13).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(1)
-                  if (toolSummary(tool)) { Text(toolSummary(tool)).fontSize(11).fontColor(C.muted).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }) }
-                }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-                Text(toolStatus(tool.status)).fontSize(10).fontColor(tool.status === 'error' || tool.status === 'failed' ? C.warning : C.secondary)
-                SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted])
-              }.id('tool-row-' + tool.id).width('100%').padding(12).onClick(() => { this.onTool(tool); })
+            ForEach(this.message.tools, (tool: ToolItem, index: number) => {
+              if (index > 0) { Divider().color(C.separator).margin({ left: 10, right: 10 }) }
+              Row({ space: 8 }) {
+                SymbolGlyph(tool.status === 'error' || tool.status === 'failed' ? $r('sys.symbol.exclamationmark_circle') : $r('sys.symbol.code_square')).fontSize(16).fontColor([tool.status === 'error' || tool.status === 'failed' ? C.danger : C.secondary])
+                Text(this.label(tool)).fontSize(12).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(1).constraintSize({ maxWidth: 90 })
+                Text(this.summary(tool)).fontSize(11).fontColor(C.muted).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+                Text(toolStatus(tool.status)).fontSize(10).fontColor(tool.status === 'error' || tool.status === 'failed' ? C.danger : C.muted)
+                SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).fontColor([C.muted])
+              }.id('tool-row-' + tool.id).width('100%').height(40).padding({ left: 10, right: 10 }).onClick(() => { this.onTool(tool); })
             }, (tool: ToolItem) => tool.id + tool.status + tool.input)
-          }.width('100%').border({ width: 1, color: C.separator }).borderRadius(12)
+          }.width('100%').border({ width: 1, color: C.separator }).borderRadius(10)
         }
-        if (this.message.text) { Button('复制回复').id('copy-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).fontSize(11).fontColor(C.secondary).onClick(() => { this.onCopy(this.message.text); }) }
+        if (this.message.text && !this.message.tools.length) { Button('复制回复').id('copy-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(24).padding({ left: 0, right: 8 }).fontSize(11).fontColor(C.muted).onClick(() => { this.onCopy(this.message.text); }) }
         if (!this.message.text && !this.message.reasoning && !this.message.tools.length) {
           Text('正在等待回复…').fontSize(13).fontColor(C.muted)
         }
-      }.alignItems(HorizontalAlign.Start).width('100%').padding({ top: 4, bottom: 20 })
+      }.alignItems(HorizontalAlign.Start).width('100%').padding({ top: 4, bottom: 6 }).justifyContent(FlexAlign.Start)
     }
   }
 }

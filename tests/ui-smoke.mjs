@@ -8,21 +8,37 @@ const target=process.env.HDC_TARGET||'127.0.0.1:5555';const port=Number(process.
 assert.ok(Number.isInteger(port)&&port>1024&&port<65536);
 const endpoint='http://127.0.0.1:'+port;mkdirSync('.test',{recursive:true});
 const cmd=(...args)=>execFileSync(hdc,['-t',target,...args],{encoding:'utf8',timeout:25000});const pause=ms=>new Promise(r=>setTimeout(r,ms));
-function flatten(n,parentId=''){return[{...n.attributes,parentId},...(n.children||[]).flatMap(c=>flatten(c,n.attributes.id))];}
+function flatten(n,parentId='',viewportBounds=''){
+ const viewport=['Scroll','List'].includes(n.attributes.type)?n.attributes.bounds:viewportBounds;
+ return[{...n.attributes,parentId,viewportBounds:viewport},...(n.children||[]).flatMap(c=>flatten(c,n.attributes.id,viewport))];
+}
 function layout(){cmd('shell','uitest dumpLayout -p /data/local/tmp/opencode-ui.json');cmd('file','recv','/data/local/tmp/opencode-ui.json',resolve('.test/'+(process.env.OPENCODE_UI_TAG||'')+'ui-layout.json'));return flatten(JSON.parse(readFileSync('.test/'+(process.env.OPENCODE_UI_TAG||'')+'ui-layout.json','utf8')));}
 const aliases={'native-back':'__NavdestinationField__BackButton__Back__native-destination','open-menu':'__NavigationField__NavigationMenu__MenuItem2__native-navigation','menu-projects':'项目与会话','menu-review':'代码审查','menu-settings':'模型与接入','menu-connections':'服务器连接','menu-sync':'同步当前对话','appearance-menu':'外观'};
 const bounds=n=>n.bounds.match(/-?\d+/g).map(Number);
 const matches=(n,q)=>n.visible!=='false'&&(n.id===q||n.text===q||(aliases[q]&&(n.id===aliases[q]||n.text===aliases[q]))||(q==='back-chat'&&n.id==='native-destination')||(q==='open-sidebar'&&n.parentId==='native-sidebar-container'&&n.type==='Button'));
 const find=q=>layout().find(n=>matches(n,q));
 async function waitFor(q){const end=Date.now()+12000;while(Date.now()<end){const n=find(q);if(n)return n;await pause(250);}throw new Error('UI control did not appear: '+q);}
-async function click(q){if(q==='back-chat'){assert.ok(find(q),'Native destination missing');cmd('shell','uitest uiInput keyEvent Back');await pause(1500);assert.ok(find('open-menu'),'Native navigation did not return');return;}await clickNode(await waitFor(q));}
+async function click(q){
+ if(q==='back-chat'){
+  assert.ok(find(q),'Native destination missing');cmd('shell','uitest uiInput keyEvent Back');
+  const end=Date.now()+12000;
+  while(Date.now()<end){
+   await pause(350);const nodes=layout();
+   if(!nodes.some(n=>matches(n,'back-chat'))&&nodes.some(n=>matches(n,'open-menu'))){await pause(500);return;}
+  }
+  throw new Error('Native navigation did not finish returning to chat');
+ }
+ await clickNode(await waitFor(q));
+}
 async function clickNode(n){assert.ok(n,'UI control missing');const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(300);}
 async function reveal(q){
  for(let i=0;i<16;i++){
   const all=layout(),root=bounds(all[0]),h=root[3],w=root[2],n=all.find(n=>n.id===q||n.text===q),b=n&&bounds(n);
-  const list=all.find(n=>n.id==='conversation-list');const chatControl=/^(choice-|field-|interaction-|approval-)/.test(q)&&list;
-  const scroll=all.find(n=>n.type==='Scroll');const viewport=chatControl?bounds(list):scroll?bounds(scroll):[0,230,w,h-50];
-  if(n&&n.visible!=='false'&&b[1]>viewport[1]+30&&b[3]<viewport[3]-20&&b[3]-b[1]>(q.startsWith('choice-')?35:8))return n;
+  const list=all.find(n=>n.id==='conversation-list'&&n.visible!=='false');const chatControl=/^(choice-|field-|interaction-|approval-|reasoning-|tool-row-)/.test(q)&&list;
+  const scroll=all.find(n=>n.type==='Scroll'&&n.visible!=='false');
+  const viewport=n?.viewportBounds?bounds({bounds:n.viewportBounds}):chatControl?bounds(list):scroll?bounds(scroll):[0,230,w,h-50];
+  const tall=b&&b[3]-b[1]>=viewport[3]-viewport[1]-32;
+  if(n&&n.visible!=='false'&&b[1]>=viewport[1]+(tall?0:8)&&b[3]<=viewport[3]+1&&b[3]-b[1]>(q.startsWith('choice-')?35:8))return n;
   const up=n?b[1]<=viewport[1]+30:i>=3;
   const from=Math.round(viewport[1]+(viewport[3]-viewport[1])*(up?.35:.7)),to=Math.round(viewport[1]+(viewport[3]-viewport[1])*(up?.7:.35));
   cmd('shell','uitest uiInput swipe '+Math.round(w*.5)+' '+from+' '+Math.round(w*.5)+' '+to+' 450');await pause(250);

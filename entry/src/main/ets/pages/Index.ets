@@ -275,7 +275,7 @@ struct Index {
           Button('重新读取审批', { type: ButtonType.Capsule }).id('permission-retry').fontSize(11).backgroundColor(C.warning_bg).fontColor(C.warning).onClick(() => { this.store.retryPermissions(); })
         }.padding(12).width('100%').constraintSize({ maxWidth: 860 })
       }
-      List({ space: 14, scroller: this.scroller }) {
+      List({ space: 4, scroller: this.scroller }) {
         if (this.store.cursor) {
           ListItem() {
             Button('加载更早消息', { type: ButtonType.Capsule }).fontSize(12).width('100%').backgroundColor(Color.Transparent).fontColor(C.muted)
@@ -298,29 +298,39 @@ struct Index {
         ForEach(this.store.interactions, (item: Interaction) => { ListItem() { this.interactionCard(item) } }, (item: Interaction) => interactionKey(item))
       }.onTouch((event: TouchEvent) => { if (event.type === TouchType.Down) { this.follow = false; } }).id('conversation-list').padding({ left: 22, right: 22 }).layoutWeight(1).width('100%').constraintSize({ maxWidth: 860 }).scrollBar(BarState.Off)
         .onScrollFrameBegin((offset: number, state: ScrollState) => { if (state === ScrollState.Scroll && offset < 0) { this.follow = false; } return { offsetRemain: offset }; })
-      Column({ space: 5 }) {
+      Column({ space: 6 }) {
+        if (!this.follow || this.store.readingHistory || this.store.newerAvailable || this.store.interactions.length || (this.store.working && !!this.store.draft.trim())) {
+          Row({ space: 8 }) {
+            if (!this.follow || this.store.readingHistory || this.store.newerAvailable) {
+              Button('回到最新').id('jump-latest').fontSize(11).height(28).backgroundColor(C.field).fontColor(C.secondary)
+                .onClick(() => { this.follow = true; if (this.store.readingHistory) { this.store.latest(); } else { this.scroller.scrollEdge(Edge.Bottom); } })
+            }
+            Blank()
+            if (this.store.interactions.length) { Button('待处理 ' + this.store.interactions.length).id('pending-interactions').fontSize(11).height(28).backgroundColor(C.warning_bg).fontColor(C.warning).onClick(() => { this.follow = false; this.scroller.scrollEdge(Edge.Bottom); }) }
+            if (this.store.working && this.store.draft.trim()) { Button('停止生成').id('stop-secondary').fontSize(11).height(28).backgroundColor(Color.Transparent).fontColor(C.danger).enabled(!this.store.interrupting).onClick(() => { this.store.interrupt(); }) }
+          }.width('100%').height(28)
+        }
         Row({ space: 8 }) {
-          if (!this.follow || this.store.readingHistory || this.store.newerAvailable) {
-            Button('↓ 回到最新', { type: ButtonType.Capsule }).id('jump-latest').fontSize(11).height(30).backgroundColor(C.field).fontColor(C.secondary)
-              .onClick(() => { this.follow = true; if (this.store.readingHistory) { this.store.latest(); } else { this.scroller.scrollEdge(Edge.Bottom); } })
+          TextArea({ placeholder: this.store.sessionID ? '发消息，或描述一个任务…' : '选择项目后开始对话', text: this.store.draft }).id('chat-input')
+            .minLines(1).maxLines(5).constraintSize({ minHeight: 42, maxHeight: 148 }).maxLength(20000).layoutWeight(1).fontSize(15).lineHeight(22)
+            .padding({ left: 0, right: 0, top: 10, bottom: 10 }).fontColor(C.text).placeholderColor(C.muted).caretColor(C.accent)
+            .backgroundColor(Color.Transparent).borderRadius(0).enabled(!this.store.pendingSend && !!this.store.sessionID).onChange((value: string) => { this.store.draft = value; })
+          if (this.store.working && !this.store.draft.trim() && !this.store.pendingSend) {
+            Button({ type: ButtonType.Circle }) { Text('■').fontSize(14).fontColor(C.on_accent) }
+              .id('stop-button').accessibilityText('停止生成').width(36).height(36).padding(0).backgroundColor(C.accent).enabled(!this.store.interrupting).margin({ bottom: 3 })
+              .onClick(() => { this.store.interrupt(); })
+          } else {
+            Button({ type: ButtonType.Circle }) {
+              if (this.store.pendingSend) { Text('重试').fontSize(10).fontColor(C.on_accent) }
+              else { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(18).fontColor([this.store.draft.trim() ? C.on_accent : C.muted]) }
+            }.id('send-button').accessibilityText(this.store.pendingSend ? '重试发送' : '发送消息').width(36).padding(0).height(36).margin({ bottom: 3 })
+              .backgroundColor(this.store.draft.trim() || this.store.pendingSend ? C.accent : C.field).enabled(!this.store.busy && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.pendingSend))
+              .onClick(() => { this.follow = true; this.store.send(); })
           }
-          Blank()
-          if (this.store.interactions.length) { Button('待处理 ' + this.store.interactions.length, { type: ButtonType.Capsule }).id('pending-interactions').fontSize(11).height(30).backgroundColor(C.warning_bg).fontColor(C.warning).onClick(() => { this.follow = false; this.scroller.scrollEdge(Edge.Bottom); }) }
-          if (this.store.working) { Button(this.store.interrupting ? '正在停止…' : '■ 停止', { type: ButtonType.Capsule }).id('stop-button').enabled(!this.store.interrupting).fontSize(11).height(30).backgroundColor(Color.Transparent).fontColor(C.danger).onClick(() => { this.store.interrupt(); }) }
-        }.width('100%').height(32)
-        Row({ space: 8 }) {
-          TextArea({ placeholder: this.store.sessionID ? '说说你想做什么…' : '选择项目并新建对话后开始', text: this.store.draft }).id('chat-input')
-            .minLines(1).maxLines(6).constraintSize({ minHeight: 56, maxHeight: 164 }).maxLength(20000).layoutWeight(1).fontSize(15).backgroundColor(Color.Transparent).borderRadius(18).enabled(!this.store.pendingSend && !!this.store.sessionID).onChange((value: string) => { this.store.draft = value; })
-          Button({ type: ButtonType.Circle }) {
-            if (this.store.pendingSend) { Text('重试').fontSize(12).fontColor(C.on_accent) }
-            else { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(21).fontColor([C.on_accent]) }
-          }.id('send-button').accessibilityText(this.store.pendingSend ? '重试发送' : '发送消息').width(42).padding(0).height(42).fontSize(this.store.pendingSend ? 12 : 23)
-            .backgroundColor(C.accent).fontColor(C.on_accent).borderRadius(21).enabled(!this.store.busy && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.pendingSend))
-            .onClick(() => { this.follow = true; this.store.send(); setTimeout(() => { this.scroller.scrollEdge(Edge.Bottom); }, 300); })
-        }.padding({ left: 8, right: 12 }).width('100%').backgroundColor(C.surface).border({ width: 1, color: C.separator }).borderRadius(24)
+        }.alignItems(VerticalAlign.Bottom).padding({ left: 14, right: 8, top: 4, bottom: 4 }).width('100%')
+          .backgroundColor(C.field).border({ width: 0.5, color: C.separator }).borderRadius(22)
         if (this.store.draft.length > 1000) { Text(String(this.store.draft.length) + ' / 20000').fontSize(10).fontColor(C.muted).width('100%').textAlign(TextAlign.End) }
-        Text('代码与任务在你的服务器运行').fontSize(9).fontColor(C.muted).padding({ top: 3 })
-      }.padding({ left: 18, right: 18, bottom: 10 }).width('100%').constraintSize({ maxWidth: 860 })
+      }.id('chat-composer').padding({ left: 16, right: 16, top: 8, bottom: 10 }).width('100%').constraintSize({ maxWidth: 860 })
     }.alignItems(HorizontalAlign.Center).layoutWeight(1).width('100%')
   }
   @Builder
@@ -573,7 +583,7 @@ struct Index {
       if (this.store.models.length) {
         Select(this.store.models.map((model: ModelItem): SelectOption => ({ value: model.label }))).id('model-select')
           .value(this.store.models.find((model: ModelItem) => model.id === this.store.modelID)?.label || '选择模型')
-          .font({ size: 14 }).fontColor(C.text).height(40).width(Math.min(240, Math.max(100, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))))
+          .font({ size: 13 }).fontColor(C.text).height(36).width(Math.min(240, Math.max(100, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))))
           .enabled(!!this.store.sessionID).onSelect((index: number) => { this.store.chooseModel(this.store.models[index].id); })
       } else { Text('OpenCode').fontSize(20).fontWeight(FontWeight.Medium).fontColor(C.text).layoutWeight(1) }
       Blank().layoutWeight(1)
@@ -610,7 +620,7 @@ struct Index {
     SideBarContainer(this.wide ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
       this.sidebar(this.wide ? 280 : Math.min(304, this.viewportWidth * 0.84))
       Navigation(this.navigation) {
-        Column({ space: 0 }) { this.errorBanner(); this.chat() }.height('100%').width('100%').backgroundColor(C.page)
+        Column({ space: 0 }) { this.errorBanner(); this.chat() }.height('100%').width('100%').backgroundColor(C.surface)
       }.id('native-navigation').title(this.chatTitle()).titleMode(NavigationTitleMode.Mini)
         .systemBarStyle({ statusBarContentColor: this.darkAppearance ? '#F0F2F6' : '#18202C' })
         .menus([{ value: '新建对话', symbolIcon: new SymbolGlyphModifier($r('sys.symbol.plus')),
@@ -618,9 +628,9 @@ struct Index {
           { value: '更多功能', symbolIcon: new SymbolGlyphModifier($r('sys.symbol.ellipsis_circle')), action: (): void => { this.showActions(); } }])
         .navDestination(this.destination).mode(NavigationMode.Stack).hideBackButton(true)
         .onNavBarStateChange((visible: boolean) => { if (visible && !this.navigation.getAllPathName().length && this.store.pane !== 'chat') { this.store.pane = 'chat'; } })
-        .backgroundColor(C.page).height('100%').width('100%')
+        .backgroundColor(C.surface).height('100%').width('100%')
     }.id('native-sidebar-container').showSideBar(this.sidebarOpen).showControlButton(!this.sidebarOpen && this.store.pane === 'chat')
-      .controlButton({ left: 8, top: 8, width: 40, height: 40 })
+      .controlButton({ left: 16, top: 16, width: 24, height: 24 })
       .sideBarWidth(this.wide ? 280 : Math.min(304, this.viewportWidth * 0.84)).minSideBarWidth(220).maxSideBarWidth(320)
       .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { this.sidebarOpen = show; })
       .width('100%').height('100%').backgroundColor(C.page).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])

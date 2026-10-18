@@ -146,4 +146,9 @@ test('unchanged message polls preserve array and object identity',()=>{
  assert.equal(core.mergeMessages(old,[{...old[0]}]),old);
  assert.notEqual(core.mergeMessages(old,[{...old[0],text:'changed'}]),old);
 });
+
+test('bold file names containing inline code do not display raw backticks',()=>{
+ const tick=String.fromCharCode(96);const parts=core.inlineMarkdown('**'+tick+'README.md'+tick+'** — file');
+ assert.equal(parts.map(p=>p.text).join(''),'README.md — file');assert.equal(parts[0].kind,'code');assert.equal(parts[0].strong,true);
+});
 console.log(count + ' core tests passed.');

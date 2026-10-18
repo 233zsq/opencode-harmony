@@ -262,14 +262,17 @@ export function visibleFormFields(fields: FormField[]): FormField[] {
   const answers = buildFormAnswer(fields, false);
   return fields.filter(field => !field.constraints?.hidden && formActive(field, answers));
 }
-export interface InlinePart { id: string; text: string; kind: string; url?: string; }
+export interface InlinePart { id: string; text: string; kind: string; url?: string; strong?: boolean; }
 export function inlineMarkdown(text: string): InlinePart[] {
   const parts: InlinePart[] = [];
   const pattern = /(\*\*([^*]+)\*\*|\x60([^\x60]+)\x60|\[([^\]]+)\]\((https?:\/\/[^)]+)\))/g;
   let start = 0; let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
     if (match.index > start) parts.push({ id: String(parts.length), text: text.slice(start, match.index), kind: 'text' });
-    parts.push({ id: String(parts.length), text: match[2] || match[3] || match[4], kind: match[2] ? 'bold' : match[3] ? 'code' : 'link', url: match[5] || '' });
+    if (match[2]) {
+      inlineMarkdown(match[2]).forEach((part: InlinePart) => parts.push({ id: String(parts.length), text: part.text,
+        kind: part.kind === 'text' ? 'bold' : part.kind, url: part.url, strong: true }));
+    } else { parts.push({ id: String(parts.length), text: match[3] || match[4], kind: match[3] ? 'code' : 'link', url: match[5] || '' }); }
     start = pattern.lastIndex;
   }
   if (start < text.length) parts.push({ id: String(parts.length), text: text.slice(start), kind: 'text' });

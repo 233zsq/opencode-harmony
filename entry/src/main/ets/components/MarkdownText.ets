@@ -9,6 +9,8 @@ export struct MarkdownText {
   onOpenLink: (url: string) => void = (): void => {};
   aboutToAppear(): void { this.refresh(); }
   private refresh(): void { this.blocks = parseMarkdown(this.content); }
+  @Builder
+  replyMenu() { Menu() { MenuItem({ content: '复制完整回复' }).onClick(() => { this.onCopy(this.content); }) } }
   build() {
     Column({ space: 6 }) {
       ForEach(this.blocks, (block: MarkdownBlock) => {
@@ -16,10 +18,11 @@ export struct MarkdownText {
           Column({ space: 6 }) {
             Row() {
               Text(block.language || 'CODE').fontSize(10).fontColor(C.code_text).layoutWeight(1)
-              Button('复制代码').id('copy-code-' + block.id).buttonStyle(ButtonStyleMode.TEXTUAL).fontSize(11).fontColor(C.code_text).height(30).onClick(() => { this.onCopy(block.text); })
+              Button('复制代码').id('copy-code-' + block.id).buttonStyle(ButtonStyleMode.TEXTUAL).fontSize(11).fontColor(C.code_text).height(24).padding({ left: 8, right: 0 }).onClick(() => { this.onCopy(block.text); })
             }.width('100%')
-            Text(block.text || ' ').fontSize(12).fontFamily('monospace').fontColor(C.code_text)
-              .copyOption(CopyOptions.InApp).width('100%')
+            Scroll() {
+              Text(block.text || ' ').fontSize(12).lineHeight(20).fontFamily('monospace').fontColor(C.code_text).copyOption(CopyOptions.InApp)
+            }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).padding({ bottom: 6 }).width('100%')
           }.alignItems(HorizontalAlign.Start).padding(12).backgroundColor(C.code_bg).borderRadius(10).width('100%')
         } else if (block.kind === 'table') {
           Scroll() {
@@ -39,7 +42,7 @@ export struct MarkdownText {
         } else {
           Text() {
             ForEach(inlineMarkdown(block.text), (part: InlinePart) => {
-              Span(part.text).fontWeight(part.kind === 'bold' ? FontWeight.Bold : FontWeight.Normal)
+              Span(part.text).fontWeight(part.kind === 'bold' || part.strong || block.kind === 'heading' ? FontWeight.Bold : FontWeight.Normal)
                 .fontFamily(part.kind === 'code' ? 'monospace' : 'sans-serif')
                 .fontColor(part.kind === 'link' ? C.accent : block.kind === 'quote' ? C.secondary : C.text)
                 .onClick(() => { if (part.kind === 'link' && part.url) { this.onOpenLink(part.url); } })
@@ -47,10 +50,10 @@ export struct MarkdownText {
           }.fontSize(block.kind === 'heading' ? 19 : 15)
             .fontWeight(block.kind === 'heading' ? FontWeight.Bold : FontWeight.Normal)
             .fontColor(block.kind === 'quote' ? C.secondary : C.text)
-            .lineHeight(26).width('100%').copyOption(CopyOptions.InApp)
+            .lineHeight(24).width('100%').copyOption(CopyOptions.InApp)
         }
       }, (block: MarkdownBlock) => block.id + block.kind + block.text + (block.kind === 'table' ? JSON.stringify(block.rows) : ''))
       if (this.content.length > 200000) { Text('预览显示前 20 万字符，可使用复制回复获取完整文本。').fontSize(11).fontColor(C.muted) }
-    }.alignItems(HorizontalAlign.Start).width('100%')
+    }.alignItems(HorizontalAlign.Start).width('100%').bindContextMenu(this.replyMenu(), ResponseType.LongPress)
   }
 }
