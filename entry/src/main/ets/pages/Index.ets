@@ -1,5 +1,6 @@
+import { copyText } from '../presentation/Clipboard';
 import { Appearance } from '../presentation/Appearance';
-import { SymbolGlyphModifier } from '@kit.ArkUI';
+import { SymbolGlyphModifier, KeyboardAvoidMode } from '@kit.ArkUI';
 import { NativeSegments } from '../components/NativeSegments';
 import { HarmonyColors as C } from '../presentation/HarmonyColors';
 import { common } from '@kit.AbilityKit';
@@ -10,7 +11,7 @@ import { ProviderSettings } from '../components/ProviderSettings';
 import { FormFieldsView } from '../components/FormFieldsView';
 import { MessageDataSource } from '../presentation/MessageDataSource';
 import { ServerConfig, ProjectItem, SessionItem, ChatMessage, ToolItem, Interaction, FormField, Choice,
-  ModelItem, FileItem, DiffItem, DiffLine, TurnItem, diffKey, parseDiff, visibleFormFields, messageKey, interactionKey, reasoningInProgress, toolStatus } from '../domain/Core';
+  ModelItem, FileItem, DiffItem, DiffLine, TurnItem, PendingItem, pendingKey, diffKey, parseDiff, visibleFormFields, messageKey, interactionKey, reasoningInProgress, toolStatus } from '../domain/Core';
 
 @Entry
 @Component
@@ -24,6 +25,12 @@ struct Index {
   @State wide: boolean = false;
   @State viewportWidth: number = 400;
   @State sessionSearch: string = '';
+  @State pendingFilter: number = 0;
+  @State selectedSession: SessionItem = { id: '', title: '', directory: '', status: '', model: '' };
+  @State sessionName: string = '';
+  private viewMessages: ChatMessage[] = [];
+  private viewInteractions: Interaction[] = [];
+  private scrollTimer: number = -1;
   @State toolSheetOpen: boolean = false;
   @State sheetKind: string = 'tool';
   @State selectedTool: ToolItem = { id: '', name: '', status: '', input: '', output: '' };
@@ -37,15 +44,18 @@ struct Index {
   private messageSource: MessageDataSource = new MessageDataSource();
 
   aboutToAppear(): void {
+    this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
     const context = this.getUIContext().getHostContext();
     if (context) { this.store.init(context as common.Context); }
   }
-  aboutToDisappear(): void { this.store.setActive(false); }
+  aboutToDisappear(): void { if (this.scrollTimer >= 0) { clearTimeout(this.scrollTimer); this.scrollTimer = -1; } this.store.setActive(false); }
   onBackPress(): boolean { if (this.sidebarOpen) { this.sidebarOpen = false; return true; } return false; }
   private storeChanged(): void {
     this.syncNavigation();
     const session = this.store.connected + '/' + this.store.sessionID;
-    if (session !== this.viewSession) { this.viewSession = session; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool') { this.toolSheetOpen = false; } this.follow = true; }
+    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session') { this.toolSheetOpen = false; } this.follow = true; }
+    if (this.viewMessages === this.store.messages && this.viewInteractions === this.store.interactions) { return; }
+    this.viewMessages = this.store.messages; this.viewInteractions = this.store.interactions;
     const active = this.store.messages.filter((m: ChatMessage) => reasoningInProgress(m)).map((m: ChatMessage) => m.id);
     const ended = this.activeReasoning.filter((id: string) => active.indexOf(id) < 0);
     const ids = this.store.messages.map((m: ChatMessage) => m.id);
@@ -56,7 +66,7 @@ struct Index {
     this.messageSource.update(this.store.messages);
     const content = this.store.messages.map((message: ChatMessage) => messageKey(message)).join('|') + '/' + this.store.interactions.map((item: Interaction) => item.id).join('|');
     const changed = content !== this.viewContent; this.viewContent = content;
-    if (changed && this.follow && this.store.pane === 'chat') { setTimeout(() => { if (this.follow) { this.scroller.scrollEdge(Edge.Bottom); } }, 40); }
+    if (changed && this.follow && this.store.pane === 'chat' && this.scrollTimer < 0) { this.scrollTimer = setTimeout(() => { this.scrollTimer = -1; if (this.follow && this.store.pane === 'chat') { this.scroller.scrollEdge(Edge.Bottom); } }, 40); }
   }
   private syncNavigation(): void {
     const names = this.navigation.getAllPathName();
@@ -72,10 +82,17 @@ struct Index {
     if (context) { Appearance.save(context as common.Context, mode).catch(() => { this.store.error = '外观设置未保存，请稍后重试。'; }); }
   }
   private pageTitle(name: string): string {
-    return name === 'connections' ? '服务器连接' : name === 'projects' ? '项目与会话' : name === 'settings' ? '模型与接入' : name === 'appearance' ? '外观' : '代码审查';
+    return name === 'pending' ? '待办中心' : name === 'connections' ? '服务器连接' : name === 'projects' ? '项目与会话' : name === 'settings' ? '模型与接入' : name === 'appearance' ? '外观' : '代码审查';
   }
   private foregroundChanged(): void { this.store.setActive(this.foreground); }
 
+  private copy(text: string): void {
+    copyText(text).then(() => { this.getUIContext().getPromptAction().showToast({ message: '已复制' }); })
+      .catch(() => { this.store.error = '复制失败，请稍后重试'; });
+  }
+  private manageSession(session: SessionItem): void {
+    this.selectedSession = session; this.sessionName = session.title; this.sheetKind = 'session'; this.toolSheetOpen = true;
+  }
   private openLink(url: string): void {
     if (!/^https:\/\/[^/?#\s@]+(?:[/?#][^\s]*)?$/.test(url)) { this.store.error = '仅支持不含账号密码的 HTTPS 授权地址'; return; }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -174,13 +191,10 @@ struct Index {
             Button('新建对话', { type: ButtonType.Capsule }).id('new-session').backgroundColor(C.accent).fontColor(C.on_accent)
               .borderRadius(9).enabled(!this.store.busy).onClick(() => { this.store.createSession(); })
           }.margin({ top: 12 }).width('100%')
-          ForEach(this.store.sessions, (session: SessionItem) => {
-            Column({ space: 6 }) {
-              Text(session.title).fontSize(16).fontColor(C.text).fontWeight(FontWeight.Medium)
-              Text(session.directory.split('/').pop() || '项目会话').fontSize(11).fontColor(C.secondary)
-            }.id('session-' + session.id).alignItems(HorizontalAlign.Start).padding(17).backgroundColor(C.surface).borderRadius(13)
-              .width('100%').onClick(() => { this.pickSession(session); })
-          }, (session: SessionItem) => session.id)
+          this.sessionFilters()
+          ForEach(this.store.sessionRows(), (session: SessionItem) => { this.sessionRow(session, false) },
+            (session: SessionItem) => session.id + session.title + this.store.sessionLabel(session.id) + String(this.store.isPinned(session.id)))
+          this.sessionPaging()
           if (this.store.sessions.length === 0) { Text('还没有会话，创建第一个任务。').fontSize(13).fontColor(C.secondary).padding(22) }
         }
       }.padding(20).width('100%')
@@ -198,6 +212,7 @@ struct Index {
   private navigate(pane: string): void {
     this.toolSheetOpen = false; this.sidebarOpen = false;
     if (pane === 'settings') { this.store.openSettings(); }
+    else if (pane === 'pending') { this.store.pane = 'pending'; this.store.refreshPending(true); }
     else if (pane === 'review') { this.store.openReview(); }
     else { this.store.pane = pane; }
   }
@@ -214,7 +229,7 @@ struct Index {
     ConversationMessage({ message: message, thinking: reasoningInProgress(message), reasoningExpanded: this.reasoningExpanded(message),
       onToggleReasoning: (): void => { this.toggleReasoning(message); },
       onTool: (tool: ToolItem): void => { this.follow = false; this.selectedTool = tool; this.sheetKind = 'tool'; this.toolSheetOpen = true; },
-      onOpenLink: (url: string): void => { this.openLink(url); } })
+      onOpenLink: (url: string): void => { this.openLink(url); }, onCopy: (text: string): void => { this.copy(text); } })
   }
   @Builder
   interactionCard(item: Interaction) {
@@ -249,6 +264,7 @@ struct Index {
       if (this.store.connected) {
         Row({ space: 8 }) {
           Text(this.store.sessionTitle || '新对话').fontSize(12).fontColor(C.secondary).maxLines(1).layoutWeight(1)
+          if (this.store.status !== '实时连接' && this.store.status !== '已连接') { Text(this.store.status).fontSize(11).fontColor(C.warning) }
           if (this.store.interactions.length) { Text('等待你处理').fontSize(11).fontColor(C.warning) }
           else if (this.store.working) { Text('正在运行').fontSize(11).fontColor(C.secondary) }
         }.padding({ left: 22, right: 22, bottom: 8 }).width('100%').constraintSize({ maxWidth: 860 })
@@ -290,11 +306,11 @@ struct Index {
           }
           Blank()
           if (this.store.interactions.length) { Button('待处理 ' + this.store.interactions.length, { type: ButtonType.Capsule }).id('pending-interactions').fontSize(11).height(30).backgroundColor(C.warning_bg).fontColor(C.warning).onClick(() => { this.follow = false; this.scroller.scrollEdge(Edge.Bottom); }) }
-          if (this.store.working) { Button('■ 停止', { type: ButtonType.Capsule }).id('stop-button').fontSize(11).height(30).backgroundColor(Color.Transparent).fontColor(C.danger).onClick(() => { this.store.interrupt(); }) }
+          if (this.store.working) { Button(this.store.interrupting ? '正在停止…' : '■ 停止', { type: ButtonType.Capsule }).id('stop-button').enabled(!this.store.interrupting).fontSize(11).height(30).backgroundColor(Color.Transparent).fontColor(C.danger).onClick(() => { this.store.interrupt(); }) }
         }.width('100%').height(32)
         Row({ space: 8 }) {
           TextArea({ placeholder: this.store.sessionID ? '说说你想做什么…' : '选择项目并新建对话后开始', text: this.store.draft }).id('chat-input')
-            .height(64).layoutWeight(1).fontSize(15).backgroundColor(Color.Transparent).borderRadius(18).enabled(!this.store.pendingSend && !!this.store.sessionID).onChange((value: string) => { this.store.draft = value; })
+            .minLines(1).maxLines(6).constraintSize({ minHeight: 56, maxHeight: 164 }).maxLength(20000).layoutWeight(1).fontSize(15).backgroundColor(Color.Transparent).borderRadius(18).enabled(!this.store.pendingSend && !!this.store.sessionID).onChange((value: string) => { this.store.draft = value; })
           Button({ type: ButtonType.Circle }) {
             if (this.store.pendingSend) { Text('重试').fontSize(12).fontColor(C.on_accent) }
             else { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(21).fontColor([C.on_accent]) }
@@ -302,6 +318,7 @@ struct Index {
             .backgroundColor(C.accent).fontColor(C.on_accent).borderRadius(21).enabled(!this.store.busy && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.pendingSend))
             .onClick(() => { this.follow = true; this.store.send(); setTimeout(() => { this.scroller.scrollEdge(Edge.Bottom); }, 300); })
         }.padding({ left: 8, right: 12 }).width('100%').backgroundColor(C.surface).border({ width: 1, color: C.separator }).borderRadius(24)
+        if (this.store.draft.length > 1000) { Text(String(this.store.draft.length) + ' / 20000').fontSize(10).fontColor(C.muted).width('100%').textAlign(TextAlign.End) }
         Text('代码与任务在你的服务器运行').fontSize(9).fontColor(C.muted).padding({ top: 3 })
       }.padding({ left: 18, right: 18, bottom: 10 }).width('100%').constraintSize({ maxWidth: 860 })
     }.alignItems(HorizontalAlign.Center).layoutWeight(1).width('100%')
@@ -401,18 +418,18 @@ struct Index {
       }.width('100%').padding({ top: 12 })
       Button('新建对话', { type: ButtonType.Capsule }).id('sidebar-new-chat').width('100%').height(42).fontSize(14).backgroundColor(C.surface).fontColor(C.text).borderRadius(12).enabled(!this.store.busy).onClick(() => { this.newChat(); })
       Button(this.projectName(), { type: ButtonType.Capsule }).id('sidebar-projects').width('100%').height(40).fontSize(13).backgroundColor(Color.Transparent).fontColor(C.secondary).enabled(!!this.store.connected).onClick(() => { this.navigate('projects'); })
-      TextInput({ placeholder: '搜索当前项目的会话', text: this.sessionSearch }).id('session-search').height(36).fontSize(12).backgroundColor(C.field).borderRadius(10).onChange((value: string) => { this.sessionSearch = value; })
-      Text('历史对话').fontSize(11).fontColor(C.muted).width('100%').padding({ top: 8 })
+      this.sessionFilters()
+      Text(this.store.showArchived ? '本机归档' : '历史对话').fontSize(11).fontColor(C.muted).width('100%').padding({ top: 8 })
       Scroll() {
         Column({ space: 5 }) {
-          ForEach(this.store.sessions.filter((session: SessionItem) => !this.sessionSearch || session.title.toLowerCase().indexOf(this.sessionSearch.toLowerCase()) >= 0), (session: SessionItem) => {
-            Text(session.title).id('sidebar-session-' + session.id).fontSize(13).fontColor(C.text).maxLines(2).width('100%').padding(12)
-              .backgroundColor(session.id === this.store.sessionID ? C.field : Color.Transparent).borderRadius(10).onClick(() => { this.pickSession(session); })
-          }, (session: SessionItem) => session.id)
-          if (!this.store.sessions.length) { Text(this.store.connected ? '选择项目后，对话会出现在这里' : '连接服务器后，继续你的对话').fontSize(12).fontColor(C.muted).padding(12) }
+          ForEach(this.store.sessionRows(this.sessionSearch), (session: SessionItem) => { this.sessionRow(session, true) },
+            (session: SessionItem) => session.id + session.title + this.store.sessionLabel(session.id) + String(this.store.isPinned(session.id)))
+          this.sessionPaging()
+          if (!this.store.sessionRows(this.sessionSearch).length) { Text(this.store.connected ? '暂无匹配的会话，可搜索服务器历史或切换归档。' : '连接服务器后，继续你的对话').fontSize(12).fontColor(C.muted).padding(12) }
         }.width('100%')
       }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
       Divider().color(C.field)
+      Button('待办中心' + (this.store.pendingItems.length ? ' · ' + this.store.pendingItems.length : ''), { type: ButtonType.Capsule }).id('nav-pending').width('100%').height(38).fontSize(13).backgroundColor(Color.Transparent).fontColor(C.secondary).enabled(!!this.store.connected).onClick(() => { this.navigate('pending'); })
       Button('代码审查', { type: ButtonType.Capsule }).id('nav-review').width('100%').height(38).fontSize(13).backgroundColor(Color.Transparent).fontColor(C.secondary).enabled(!!this.store.directory).onClick(() => { this.navigate('review'); })
       Button('模型与接入', { type: ButtonType.Capsule }).id('nav-settings').width('100%').height(38).fontSize(13).backgroundColor(Color.Transparent).fontColor(C.secondary).enabled(!!this.store.connected).onClick(() => { this.navigate('settings'); })
       Row({ space: 10 }) {
@@ -428,9 +445,11 @@ struct Index {
   @Builder
   sheetContent() {
     if (this.sheetKind === 'tool') { this.toolDetails() }
+    else if (this.sheetKind === 'session') { this.sessionActions() }
     else {
       Column({ space: 8 }) {
         Text('更多功能').fontSize(18).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%').padding({ bottom: 10 })
+        Button('待办中心').enabled(!!this.store.connected).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('pending'); })
         Button('项目与会话').enabled(!!this.store.connected).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('projects'); })
         Button('代码审查').enabled(!!this.store.directory).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('review'); })
         Button('模型与接入').enabled(!!this.store.connected).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('settings'); })
@@ -439,6 +458,83 @@ struct Index {
         Button('同步当前对话').enabled(!!this.store.sessionID).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.toolSheetOpen = false; this.store.sync(); })
       }.padding({ left: 20, right: 20, top: 24, bottom: 20 }).width('100%')
     }
+  }
+  @Builder
+  sessionFilters() {
+    Row({ space: 6 }) {
+      TextInput({ placeholder: '搜索会话名称', text: this.sessionSearch }).id('session-search').height(36).fontSize(12).backgroundColor(C.field).layoutWeight(1)
+        .onChange((value: string) => { this.sessionSearch = value; })
+      Button('搜索').id('session-search-server').height(36).fontSize(12).enabled(!this.store.sessionsBusy && !!this.store.directory)
+        .onClick(() => { this.store.refreshSessions(false, this.sessionSearch); })
+    }.width('100%')
+    if (this.store.sessionQuery) { Text('服务器搜索：' + this.store.sessionQuery).fontSize(10).fontColor(C.secondary).maxLines(1).width('100%') }
+    Row({ space: 6 }) {
+      Button('最近').id('sessions-recent').layoutWeight(1).height(32).fontSize(12).backgroundColor(this.store.showArchived ? Color.Transparent : C.field).fontColor(C.text)
+        .onClick(() => { this.store.showArchived = false; if (this.store.sessionQuery) { this.sessionSearch = ''; this.store.refreshSessions(false, ''); } })
+      Button('本机归档').id('sessions-archived').layoutWeight(1).height(32).fontSize(12).backgroundColor(this.store.showArchived ? C.field : Color.Transparent).fontColor(C.text)
+        .onClick(() => { this.store.showArchived = true; })
+      Button('刷新').id('sessions-refresh').height(32).fontSize(12).enabled(!this.store.sessionsBusy).onClick(() => { this.store.refreshSessions(false, this.sessionSearch); })
+    }.width('100%')
+  }
+  @Builder
+  sessionRow(session: SessionItem, compact: boolean) {
+    Row({ space: 4 }) {
+      Column({ space: 4 }) {
+        Text((this.store.isPinned(session.id) ? '置顶 · ' : '') + session.title).fontSize(compact ? 13 : 16).fontColor(C.text).maxLines(2).width('100%')
+        if (this.store.sessionLabel(session.id)) { Text(this.store.sessionLabel(session.id)).fontSize(11).fontColor(C.warning).width('100%') }
+      }.id((compact ? 'sidebar-session-' : 'session-') + session.id).alignItems(HorizontalAlign.Start).layoutWeight(1).padding(10).onClick(() => { this.pickSession(session); })
+      Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.ellipsis_circle')).fontSize(18).fontColor([C.secondary]) }
+        .id('session-actions-' + session.id).width(36).height(36).backgroundColor(Color.Transparent).accessibilityText('管理会话 ' + session.title).onClick(() => { this.manageSession(session); })
+    }.width('100%').backgroundColor(session.id === this.store.sessionID ? C.field : compact ? Color.Transparent : C.surface).borderRadius(12)
+  }
+  @Builder
+  sessionPaging() {
+    if (this.store.sessionsError) { Text(this.store.sessionsError).fontSize(12).fontColor(C.danger).width('100%') }
+    if (this.store.sessionsBusy) { Text('正在读取会话…').fontSize(12).fontColor(C.muted).padding(8) }
+    if (this.store.sessionCursor && this.store.sessions.length < 500) { Button('加载更多会话').id('sessions-more').fontSize(12).enabled(!this.store.sessionsBusy).onClick(() => { this.store.refreshSessions(true); }) }
+    if (this.store.sessions.length >= 500) { Text('已显示 500 个会话，可用名称搜索服务器历史。').fontSize(11).fontColor(C.muted).padding(8) }
+  }
+  @Builder
+  sessionActions() {
+    Column({ space: 14 }) {
+      Text('管理会话').fontSize(18).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+      TextInput({ text: this.sessionName, placeholder: '会话名称' }).id('session-name').maxLength(200).onChange((value: string) => { this.sessionName = value; })
+      Button(this.store.sessionMutationBusy ? '保存中…' : '保存名称').id('session-rename').width('100%').enabled(!this.store.sessionMutationBusy && !this.store.sessionPreferenceBusy && !!this.sessionName.trim())
+        .onClick(() => { this.store.renameSession(this.selectedSession.id, this.sessionName).then((saved: boolean) => { if (saved) { this.toolSheetOpen = false; } }); })
+      Button(this.store.isPinned(this.selectedSession.id) ? '取消置顶' : '置顶会话').id('session-pin').width('100%').enabled(!this.store.sessionPreferenceBusy && !this.store.sessionMutationBusy)
+        .onClick(() => { this.store.setSessionPreference(this.selectedSession.id, !this.store.isPinned(this.selectedSession.id), this.store.isArchived(this.selectedSession.id)); })
+      Button(this.store.isArchived(this.selectedSession.id) ? '移回最近会话' : '归档到本机列表').id('session-archive').width('100%').enabled(!this.store.sessionPreferenceBusy && !this.store.sessionMutationBusy)
+        .onClick(() => { this.store.setSessionPreference(this.selectedSession.id, this.store.isPinned(this.selectedSession.id), !this.store.isArchived(this.selectedSession.id)); })
+      Text('置顶和归档仅影响这台设备。归档保留服务器历史，运行中的任务会继续，待办仍会显示。').fontSize(12).fontColor(C.secondary).width('100%')
+      if (this.store.error) { Text(this.store.error).fontSize(12).fontColor(C.danger).width('100%') }
+    }.padding(20).width('100%')
+  }
+  @Builder
+  pendingCenter() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('当前服务器 · 所有已知项目').fontSize(13).fontColor(C.secondary).layoutWeight(1)
+        Button('刷新').id('pending-refresh').enabled(!this.store.pendingBusy).onClick(() => { this.store.refreshPending(true); })
+      }.width('100%')
+      NativeSegments({ first: '全部', second: '问题', third: '审批', selected: this.pendingFilter, onSelect: (index: number): void => { this.pendingFilter = index; } })
+      if (this.store.pendingError) { Text(this.store.pendingError + '。旧结果已保留，打开会话后重新核对。').fontSize(12).fontColor(C.warning).width('100%') }
+      if (this.store.pendingBusy) { Text('正在同步待办…').fontSize(12).fontColor(C.secondary).width('100%') }
+      if (!this.store.pendingBusy && !this.store.pendingError && !this.store.pendingItems.length) { Text('当前没有待处理的问题或审批。').fontSize(14).fontColor(C.secondary).padding(24) }
+      List({ space: 10 }) {
+        ForEach(this.store.pendingItems.filter((p: PendingItem) => this.pendingFilter === 0 || p.kind === (this.pendingFilter === 1 ? 'form' : 'permission')), (item: PendingItem) => {
+          ListItem() {
+            Column({ space: 6 }) {
+              Text((item.stale ? '待确认 · ' : '') + (item.kind === 'form' ? '需要回答' : '需要审批')).fontSize(11).fontColor(C.warning).width('100%')
+              Text(item.title).fontSize(16).fontColor(C.text).maxLines(3).width('100%')
+              Text(item.sessionTitle || item.sessionID).fontSize(12).fontColor(C.secondary).width('100%')
+              Text(item.directory).fontSize(11).fontColor(C.muted).maxLines(2).width('100%')
+              Button('打开会话处理').id('pending-open-' + item.kind + '-' + item.id).enabled(!this.store.busy)
+                .onClick(() => { this.follow = true; this.store.openPending(item); })
+            }.padding(16).backgroundColor(C.surface).borderRadius(14).width('100%')
+          }
+        }, (item: PendingItem) => pendingKey(item) + item.title + item.sessionTitle + String(item.stale))
+      }.layoutWeight(1).width('100%')
+    }.padding(20).height('100%').width('100%')
   }
   @Builder
   appearanceSettings() {
@@ -488,6 +584,7 @@ struct Index {
     if (this.store.error) {
       Row({ space: 8 }) {
         Text(this.store.error).fontSize(12).fontColor(C.danger).layoutWeight(1).maxLines(3)
+        if (this.store.connected && this.store.status !== '实时连接' && this.store.status !== '已连接') { Button('重新连接').fontSize(12).enabled(!this.store.busy).onClick(() => { this.store.reconnect(); }) }
         Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.xmark')).fontSize(14).fontColor([C.secondary]) }
           .width(32).height(32).backgroundColor(Color.Transparent).accessibilityText('关闭提示').onClick(() => { this.store.error = ''; })
       }.padding({ left: 20, right: 12, top: 6, bottom: 6 }).backgroundColor(C.danger_bg).width('100%')
@@ -500,6 +597,7 @@ struct Index {
         this.errorBanner()
         if (name === 'connections') { this.connections() }
         else if (name === 'projects') { this.projects() }
+        else if (name === 'pending') { this.pendingCenter() }
         else if (name === 'appearance') { this.appearanceSettings() }
         else if (name === 'settings') { ProviderSettings({ store: this.store.providers, onOpenLink: (url: string): void => { this.openLink(url); } }) }
         else { this.review() }

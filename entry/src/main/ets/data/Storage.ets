@@ -3,7 +3,7 @@ import { preferences } from '@kit.ArkData';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { ServerConfig } from '../domain/Core';
+import { ServerConfig, SessionPreference } from '../domain/Core';
 
 export class Storage {
   private prefs: preferences.Preferences | undefined = undefined;
@@ -30,6 +30,17 @@ export class Storage {
   }
   async last(serverID: string): Promise<string[]> {
     try { return JSON.parse(await this.prefs?.get('position.' + serverID, '[]') as string || '[]') as string[]; }
+    catch (e) { throw e as Error; }
+  }
+  async sessionPreferences(serverID: string): Promise<SessionPreference[]> {
+    try {
+      const value = JSON.parse(await this.prefs?.get('sessionPreferences.' + serverID, '[]') as string || '[]') as SessionPreference[];
+      return Array.isArray(value) ? value.filter((p: SessionPreference) => typeof p.id === 'string' && (p.pinned === true || p.archived === true)) : [];
+    } catch (_) { return []; }
+  }
+  async saveSessionPreferences(serverID: string, flags: SessionPreference[]): Promise<void> {
+    if (!this.prefs) { throw new Error('本机设置尚未就绪'); }
+    try { await this.prefs.put('sessionPreferences.' + serverID, JSON.stringify(flags)); await this.prefs.flush(); }
     catch (e) { throw e as Error; }
   }
   private query(id: string): asset.AssetMap {

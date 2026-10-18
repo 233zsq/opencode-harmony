@@ -116,6 +116,9 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/location') return send(res, { directory, project: { id: 'prj_fixture', directory, canonical: directory } });
   if (path === '/api/session' && req.method === 'POST') return send(res, { data: session });
   if (path === '/api/session') return send(res, { data: [session], cursor: {} });
+  if (path === '/api/form') return send(res, { location: { directory }, data: forms });
+  if (path === '/api/permission/request') return permissionReadFailure ? send(res, { error: 'Controlled approval read failure' }, 400) : send(res, { location: { directory }, data: permissions });
+  if (path === '/api/session/' + session.id && req.method === 'PATCH') { session.title = input.title; return send(res, {}, 204); }
   if (path === '/api/session/active') return send(res, { data: active ? { [session.id]: { type: 'running' } } : {} });
   if (path === '/api/model') return send(res, { location: { directory }, data: [
     { id: 'fixture/fixture-coder', modelID: 'fixture-coder', providerID: 'fixture', name: '本机测试模型', enabled: true, status: 'active' },

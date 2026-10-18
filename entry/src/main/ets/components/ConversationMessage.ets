@@ -7,10 +7,13 @@ export struct ConversationMessage {
   @Prop message: ChatMessage = { id: '', role: '', text: '', reasoning: '', tools: [], parts: [], state: 'completed' };
   @Prop thinking: boolean = false;
   @Prop reasoningExpanded: boolean = false;
+  onCopy: (text: string) => void = (): void => {};
   onToggleReasoning: () => void = (): void => {};
   onTool: (tool: ToolItem) => void = (tool: ToolItem): void => {};
   onOpenLink: (url: string) => void = (url: string): void => {};
   private reasoningScroller: Scroller = new Scroller();
+  @Builder
+  copyMenu() { Menu() { MenuItem({ content: '复制消息' }).onClick(() => { this.onCopy(this.message.text); }) } }
   build() {
     if (this.message.role === 'user') {
       Row() {
@@ -18,7 +21,7 @@ export struct ConversationMessage {
         Text(this.message.text).id('message-user-' + this.message.id).fontSize(15).lineHeight(25).fontColor(C.text)
           .padding({ left: 18, right: 18, top: 12, bottom: 12 }).backgroundColor(C.bubble).borderRadius(20)
           .constraintSize({ maxWidth: '88%' }).copyOption(CopyOptions.InApp)
-      }.width('100%').margin({ top: 6, bottom: 14 })
+      }.width('100%').margin({ top: 6, bottom: 14 }).bindContextMenu(this.copyMenu(), ResponseType.LongPress)
     } else if (this.message.role !== 'assistant') {
       Text(this.message.text).fontSize(11).fontColor(C.muted).width('100%').textAlign(TextAlign.Center).padding(8)
     } else {
@@ -45,7 +48,7 @@ export struct ConversationMessage {
             }
           }.width('100%').border({ width: 1, color: C.separator }).borderRadius(12)
         }
-        if (this.message.text) { MarkdownText({ content: this.message.text, onOpenLink: this.onOpenLink }) }
+        if (this.message.text) { MarkdownText({ content: this.message.text, onOpenLink: this.onOpenLink, onCopy: this.onCopy }) }
         if (this.message.tools.length) {
           Column({ space: 0 }) {
             ForEach(this.message.tools, (tool: ToolItem) => {
@@ -61,6 +64,7 @@ export struct ConversationMessage {
             }, (tool: ToolItem) => tool.id + tool.status + tool.input)
           }.width('100%').border({ width: 1, color: C.separator }).borderRadius(12)
         }
+        if (this.message.text) { Button('复制回复').id('copy-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).fontSize(11).fontColor(C.secondary).onClick(() => { this.onCopy(this.message.text); }) }
         if (!this.message.text && !this.message.reasoning && !this.message.tools.length) {
           Text('正在等待回复…').fontSize(13).fontColor(C.muted)
         }

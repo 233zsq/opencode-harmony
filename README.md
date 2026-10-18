@@ -9,20 +9,21 @@
 - 对话首页、原生导航与系统菜单、手机抽屉与Pad宽屏侧栏；历史搜索、独立管理页面及最近服务器恢复。
 - API26 原生沉浸光感、系统分段控件及跟随系统/浅色/深色外观；最低兼容 API24。
 - 多服务器配置、HTTP Basic 认证、连接与错误状态。
-- 项目/目录、创建和恢复会话、历史分页。
+- 项目/目录、创建和恢复会话、历史分页；会话改名、本机置顶/归档及服务器名称搜索。
 - SSE 流式正文，思考结束自动收起、工具摘要点击查看详情；原生 Markdown、代码块、表格和可点击 HTTPS 链接。
 - V2 Question/Form：单选、多选、文本、条件字段、默认值与类型校验。
 - 审批前查看命令、目录、操作范围及请求自带 Diff；批准前重新核对，支持单次批准/拒绝及失败恢复。
 - 动态模型目录、会话模型切换及每个服务器的模型偏好。
 - 手机端提供商搜索、API Key、OAuth 设备码/授权码和多账号管理；受限自定义兼容渠道。
 - 只读文件浏览、工作区 Git Diff，以及按任务快照查看会话修改。
-- 退避重连、回前台同步、消息 ID 去重与迟到响应隔离。
+- 退避重连、回前台同步、消息 ID 去重与迟到响应隔离；发送结果核对、草稿及 Question 答案在本次运行中暂存。
+- 跨项目待办中心、侧栏运行/待回答/待审批状态；消息/代码复制及原生多行输入。
 
-已在 API26 模拟器和 API24 Pad 构建、安装并运行，Pad 使用本机 DevEco 调试签名及 Wi-Fi 调试。真实 MiMo 对话、Question、拒绝与批准文件修改、只读 Diff 和应用重开恢复均有设备验证；另有80项客户端/协议与外观回归、2项域名迁移生成器回归及11项Linux设置服务先前测试记录。本轮完善见 [REFINEMENTS.md](docs/REFINEMENTS.md)，详细证据与限制见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行，Pad 使用本机 DevEco 调试签名及 Wi-Fi 调试。真实 MiMo 对话、Question、拒绝与批准文件修改、只读 Diff 和应用重开恢复均有设备验证；新增功能尚未进行设备验收；本机已有124项客户端、协议、存储与HTTP回归、2项域名迁移生成器回归及4项合成负载检查通过，11项Linux设置服务保留先前测试记录。本轮完善见 [REFINEMENTS.md](docs/REFINEMENTS.md)，详细证据与限制见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
 独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
-界面位置与交互规则、设备验证见 [UI.md](docs/UI.md)。本轮原生控件、API26材质和兼容边界见 [NATIVE-UI.md](docs/NATIVE-UI.md)。
+界面位置与交互规则、设备验证见 [UI.md](docs/UI.md)。原生控件、API26材质和兼容边界见 [NATIVE-UI.md](docs/NATIVE-UI.md)。聊天、会话与待办的新功能和最终交互验收清单见 [WORKSPACE-FEATURES.md](docs/WORKSPACE-FEATURES.md)。
 
 ## 开发环境
 
@@ -50,6 +51,10 @@
     node tests/state.test.mjs
     node tests/permission-metadata.test.mjs
     node tests/appearance.test.mjs
+    node tests/local-state.test.mjs
+    node tests/workspace-http.test.mjs
+    node tests/performance.mjs
+    python tests/domain_entry_test.py
 
 Python设置服务的11项测试使用Linux运行 `python3 tests/mobile_settings_test.py`，依赖fcntl；Windows本机仅运行上述Node测试。
 

@@ -18,7 +18,7 @@ const httpMock = {
     destroy() {}, on() {}, requestInStream: async (url, options) => { requests.push({ url, options }); return 200; }
   })
 };
-class StorageMock { async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} async activeServer() { return ''; } async rememberServer() {} }
+class StorageMock { async sessionPreferences() { return []; } async saveSessionPreferences() {} async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} async activeServer() { return ''; } async rememberServer() {} }
 const modules = new Map([
   ['@kit.NetworkKit', { http: httpMock }],
   ['@kit.ArkTS', { util: { TextEncoder: Encoder, TextDecoder: Decoder, Base64Helper: Base64 } }],
@@ -343,5 +343,146 @@ await test('new channel and server changes clear prior editor values and never c
 await test('provider quick entry selects the server declared key form and catalog search remains bounded',async()=>{
  const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',supported:true,fields:[]}],accounts:[]}];store.quickSelect('deepseek');assert.equal(store.selected,'deepseek');assert.equal(store.methodType,'key');
  store.catalog=Array.from({length:100},(_,i)=>({id:'p/mimo-'+i,label:'MiMo '+i}));store.modelSearch='mimo';assert.equal(store.modelMatches().length,100);assert.equal(store.visibleModels().length,60);store.modelSearch='not present';assert.equal(store.visibleModels().length,0);
+});
+
+const workspaceSession=(id,title=id,directory='/repo')=>({id,title,directory,status:'idle',model:''});
+const pendingItem=(id,sessionID='s',directory='/repo',kind='permission')=>({id,sessionID,directory,kind,title:'Pending '+id,sessionTitle:'',stale:false});
+await test('session protocol encodes paging/search and literal PATCH with title-only body',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'u'},'');const calls=[];api.request=async(path,method,body)=>{calls.push({path,method,body});return{data:[{id:'a',title:'A',location:{directory:'/repo'},time:{archived:1}}],cursor:{next:'next page'}};};
+ const first=await api.sessionPage('/repo space','','a&b');assert.equal(first.cursor,'next page');assert.equal(first.sessions[0].archived,true);assert.match(calls[0].path,/search=a%26b/);assert.match(calls[0].path,/directory=%2Frepo%20space/);
+ await api.sessionPage('/repo','next page','ignored');assert.match(calls[1].path,/cursor=next%20page/);assert.ok(!calls[1].path.includes('search='));
+ await api.renameSession('a/b','New');assert.equal(calls[2].path,'/api/session/a%2Fb');assert.equal(calls[2].method,'PATCH');assert.equal(JSON.stringify(calls[2].body),'{'+'"title":"New"}');
+});
+await test('global pending protocol uses location-scoped V2 form and permission routes',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'u'},'');const paths=[];api.request=async path=>{paths.push(path);return{data:[{id:'p',sessionID:'s',action:'edit'}]};};
+ assert.equal((await api.pending('/repo space','form'))[0].kind,'form');await api.pending('/repo space','permission');
+ assert.equal(paths[0],'/api/form?location%5Bdirectory%5D=%2Frepo%20space');assert.equal(paths[1],'/api/permission/request?location%5Bdirectory%5D=%2Frepo%20space');
+});
+await test('switching conversations restores unsent text and the same uncertain prompt ID',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.active=false;store.api={};
+ await store.openSession(workspaceSession('a'));store.draft='draft A';store.pendingSend={id:'prompt-a',sessionID:'a',text:'draft A'};
+ await store.openSession(workspaceSession('b'));assert.equal(store.draft,'');store.draft='draft B';
+ await store.openSession(workspaceSession('a'));assert.equal(store.draft,'draft A');assert.equal(store.pendingSend.id,'prompt-a');
+ store.disconnect();store.connected='two';store.directory='/repo';store.api={};await store.openSession(workspaceSession('a'));assert.equal(store.draft,'');assert.equal(store.pendingSend,undefined);
+});
+await test('a late send acknowledgement cannot clear another conversations draft or leave it busy',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.active=false;store.sessionID='a';store.draft='A';let release;
+ store.api={request:()=>new Promise(r=>release=r)};const send=store.send();await store.openSession(workspaceSession('b'));store.draft='B';release({});await send;
+ assert.equal(store.sessionID,'b');assert.equal(store.draft,'B');assert.equal(store.busy,false);await store.openSession(workspaceSession('a'));assert.equal(store.pendingSend.text,'A');
+});
+await test('local archive/pin saves no API mutations and failed preferences retain visible state',async()=>{
+ const store=new AppStore();store.connected='one';let saved;store.api={request:()=>{throw new Error('Unexpected API write');}};store.storage={saveSessionPreferences:async(server,flags)=>{saved={server,flags};}};
+ await store.setSessionPreference('s',true,true);assert.equal(saved.server,'one');assert.equal(store.isArchived('s'),true);assert.equal(store.isPinned('s'),true);
+ store.storage.saveSessionPreferences=async()=>{throw new Error('disk full');};await store.setSessionPreference('s',false,false);assert.equal(store.isArchived('s'),true);assert.match(store.error,/disk full/);
+});
+await test('session rename validates input and ignores a late response from another server',async()=>{
+ const store=new AppStore();store.connected='one';store.sessionID='a';store.sessionTitle='Old';store.sessions=[workspaceSession('a','Old')];let calls=0,release;
+ store.api={renameSession:()=>{calls++;return new Promise(r=>release=r);}};assert.equal(await store.renameSession('a','  '),false);assert.equal(calls,0);
+ const write=store.renameSession('a','New');store.disconnect();store.connected='two';store.sessionTitle='Other';release();assert.equal(await write,false);assert.equal(store.sessionTitle,'Other');
+});
+await test('successful rename updates current title, sidebar row and pending context',async()=>{
+ const store=new AppStore();store.sessionID='s';store.sessionTitle='Old';store.sessions=[workspaceSession('s','Old')];store.pendingItems=[pendingItem('p')];store.api={renameSession:async()=>{}};
+ assert.equal(await store.renameSession('s',' New '),true);assert.equal(store.sessionTitle,'New');assert.equal(store.sessions[0].title,'New');assert.equal(store.pendingItems[0].sessionTitle,'New');
+});
+await test('session pagination deduplicates and a new search invalidates an older page',async()=>{
+ const store=new AppStore();store.directory='/repo';let release;store.api={sessionPage:async(_,cursor,search)=>cursor?new Promise(r=>release=r):{sessions:[workspaceSession(search||'a')],cursor:'older'}};
+ await store.refreshSessions();const older=store.refreshSessions(true);await store.refreshSessions(false,'found');release({sessions:[workspaceSession('old')],cursor:''});await older;
+ assert.equal(store.sessions[0].id,'found');assert.equal(store.sessionQuery,'found');assert.equal(store.sessionsBusy,false);
+ store.api.sessionPage=async()=>({sessions:[workspaceSession('found'),workspaceSession('next')],cursor:''});await store.refreshSessions(true);assert.equal(store.sessions.length,2);
+});
+await test('session list errors keep prior rows and a disconnected read cannot repopulate them',async()=>{
+ const store=new AppStore();store.directory='/repo';store.sessions=[workspaceSession('kept')];store.api={sessionPage:async()=>{throw new Error('offline');}};
+ await store.refreshSessions();assert.equal(store.sessions[0].id,'kept');assert.match(store.sessionsError,/offline/);
+ let release;store.api.sessionPage=()=>new Promise(r=>release=r);const read=store.refreshSessions();store.disconnect();release({sessions:[workspaceSession('late')],cursor:''});await read;assert.equal(store.sessions.length,0);assert.equal(store.sessionsBusy,false);
+});
+await test('pending center reads all known projects once and distinguishes questions from approvals',async()=>{
+ const store=new AppStore();store.directory='/repo';store.projects=[{directory:'/repo'},{directory:'/second'}];const calls=[];
+ store.api={request:async()=>({data:{}}),pending:async(dir,kind)=>{calls.push(dir+kind);return[pendingItem(dir+kind,'s',dir,kind)];}};await store.refreshPending();assert.equal(calls.length,4);assert.equal(store.pendingItems.length,4);assert.equal(new Set(calls).size,4);assert.equal(store.pendingBusy,false);
+});
+await test('one failing pending scope retains stale items while successful empty scopes clear theirs',async()=>{
+ const store=new AppStore();store.directory='/repo';store.pendingItems=[pendingItem('p'),pendingItem('q','s','/repo','form')];store.api={request:async()=>({data:{}}),pending:async(_,kind)=>{if(kind==='permission')throw new Error('offline');return[];}};
+ await store.refreshPending();assert.equal(store.pendingItems.length,1);assert.equal(store.pendingItems[0].id,'p');assert.equal(store.pendingItems[0].stale,true);assert.match(store.pendingError,/审批/);
+ store.api.pending=async()=>[];await store.refreshPending();assert.equal(store.pendingItems.length,0);assert.equal(store.pendingError,'');
+});
+await test('newer pending refresh wins and old-server results never enter the active connection',async()=>{
+ const store=new AppStore();store.directory='/repo';let releases=[];store.api={request:async()=>({data:{}}),pending:()=>new Promise(r=>releases.push(r))};const old=store.refreshPending();
+ const oldReleases=releases;store.api.pending=async()=>[pendingItem('new')];await store.refreshPending(true);oldReleases.forEach(r=>r([pendingItem('old')]));await old;assert.equal(store.pendingItems[0].id,'new');
+ releases=[];store.api.pending=()=>new Promise(r=>releases.push(r));const read=store.refreshPending();store.disconnect();releases.forEach(r=>r([pendingItem('late')]));await read;assert.equal(store.pendingItems.length,0);
+});
+await test('pending collection caps request concurrency and reports its project bound',async()=>{
+ const store=new AppStore();store.projects=Array.from({length:70},(_,i)=>({directory:'/p'+i}));let concurrent=0,max=0,calls=0;
+ store.api={request:async()=>({data:{}}),pending:async()=>{calls++;max=Math.max(max,++concurrent);await Promise.resolve();concurrent--;return[];}};await store.refreshPending();assert.equal(calls,128);assert.ok(max<=6);assert.match(store.pendingError,/上限/);
+});
+await test('authentication failure in pending stops reconnects and preserves uncertainty',async()=>{
+ const store=new AppStore();store.directory='/repo';store.pendingItems=[pendingItem('p')];store.api={request:async()=>({data:{}}),pending:async()=>{throw new protocol.ApiError(401,'Unauthorized');}};
+ await store.refreshPending();assert.equal(store.networkBlocked,true);assert.equal(store.status,'认证失败');assert.equal(store.pendingItems[0].stale,true);assert.equal(store.pendingBusy,false);assert.ok(store.pendingError);
+});
+await test('opening a pending item resolves its real project and performs no answer or approval writes',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.sessionID='old';store.active=false;const calls=[];
+ store.api={session:async()=>workspaceSession('target','Target','/second'),scope:dir=>dir,request:async(path,method)=>{calls.push({path,method});return{};},sessionPage:async()=>({sessions:[],cursor:''}),models:async()=>[]};
+ await store.openPending(pendingItem('p','target','/second'));assert.equal(store.directory,'/second');assert.equal(store.sessionID,'target');assert.equal(store.pane,'chat');assert.ok(calls.every(c=>!c.method||c.method==='GET'));assert.equal(store.busy,false);
+});
+await test('expired pending and late navigation requests never open another sessions content',async()=>{
+ const store=new AppStore();store.connected='one';store.sessionID='current';store.api={session:async()=>{throw new protocol.ApiError(404,'gone');}};await store.openPending(pendingItem('p'));assert.equal(store.sessionID,'current');
+ let release;store.api.session=()=>new Promise(r=>release=r);const open=store.openPending(pendingItem('p'));store.disconnect();store.connected='two';store.sessionID='other';release(workspaceSession('stale'));await open;assert.equal(store.sessionID,'other');
+});
+await test('callbacks from a replaced stream cannot append text or change connection state',async()=>{
+ const store=new AppStore();store.sessionID='s';const callbacks=[];store.api={stream:(frame,data,end)=>{callbacks.push({frame,data,end});return()=>{};}};
+ store.openStream();store.openStream();callbacks[0].frame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'s',assistantMessageID:'old',ordinal:0,delta:'bad'}})});callbacks[0].end(new protocol.ApiError(401,'old'));assert.equal(store.messages.length,0);assert.equal(store.networkBlocked,false);
+ callbacks[1].frame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'s',assistantMessageID:'new',ordinal:0,delta:'ok'}})});assert.equal(store.messages[0].text,'ok');store.setActive(false);store.setActive(true);callbacks[1].frame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'s',assistantMessageID:'new',ordinal:0,delta:'late'}})});assert.equal(store.messages[0].text,'ok');
+});
+
+await test('pinned or archived bookmarks remain visible after the server first-page window changes',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.sessions=[workspaceSession('old','Saved title')];
+ await store.setSessionPreference('old',true,true);store.sessions=[];store.showArchived=true;assert.equal(store.sessionRows()[0].id,'old');assert.equal(store.sessionRows()[0].title,'Saved title');
+ store.directory='/other';assert.equal(store.sessionRows().length,0);
+});
+await test('running sidebar state is restored before receiving any text deltas',async()=>{
+ const store=new AppStore();store.directory='/repo';store.api={request:async()=>({data:{already_running:{type:'running'}}}),pending:async()=>[]};
+ await store.refreshPending();assert.equal(store.sessionLabel('already_running'),'运行中');
+ store.api.request=async()=>{throw new Error('offline');};await store.refreshPending();assert.equal(store.sessionLabel('already_running'),'运行状态待确认');assert.match(store.pendingError,/运行/);
+});
+await test('same-server reconnect invalidates an older local preference write callback',async()=>{
+ const store=new AppStore();store.connected='one';let release;store.storage={saveSessionPreferences:()=>new Promise(r=>release=r)};const write=store.setSessionPreference('old',true,false);
+ store.disconnect();store.connected='one';store.sessionPreferences=[{id:'new',pinned:true,archived:false}];release();await write;assert.equal(store.sessionPreferences[0].id,'new');assert.equal(store.sessionPreferenceBusy,false);
+});
+
+await test('Question field drafts survive a conversation switch and restore only still-existing fields',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.active=false;store.api={};await store.openSession(workspaceSession('a'));
+ const field={key:'name',label:'Name',type:'string',required:true,options:[],values:[],text:'typed answer'};store.interactions=[{...form(),sessionID:'a',fields:[field]}];
+ await store.openSession(workspaceSession('b'));await store.openSession(workspaceSession('a'));assert.equal(store.interactions.length,0);
+ await store.syncInteractions({interactions:async()=>[{...form(),sessionID:'a',fields:[{...field,text:''}]}]},'a','form',store.generation);assert.equal(store.interactions[0].fields[0].text,'typed answer');
+});
+await test('renaming a bookmarked conversation persists its display name for the next launch',async()=>{
+ const store=new AppStore();store.connected='one';store.sessionPreferences=[{id:'s',pinned:true,archived:true,directory:'/repo',title:'Old'}];let saved;
+ store.storage={saveSessionPreferences:async(_,flags)=>{saved=flags;}};store.api={renameSession:async()=>{}};assert.equal(await store.renameSession('s','New'),true);assert.equal(saved[0].title,'New');
+});
+await test('directly opening a session in another location switches scope before fetching its history',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/first';store.active=false;const paths=[];
+ store.api={request:async path=>{paths.push(path);return{};},scope:dir=>dir,sessionPage:async()=>({sessions:[],cursor:''}),models:async()=>[]};await store.openSession(workspaceSession('s','Second','/second'));
+ assert.equal(store.directory,'/second');assert.equal(store.sessionID,'s');assert.equal(paths[0],'/api/location?/second');
+});
+
+await test('unarchiving an older bookmarked session returns it to recent rows immediately',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.sessionPreferences=[{id:'old',pinned:false,archived:true,directory:'/repo',title:'Old'}];
+ await store.setSessionPreference('old',false,false);assert.equal(store.sessionRows()[0].id,'old');assert.equal(store.isArchived('old'),false);
+});
+await test('definitively rejected prompts become editable while uncertain sends retain their original ID',async()=>{
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.sessionID='s';store.draft='invalid';store.api={request:async()=>{throw new protocol.ApiError(400,'invalid request');}};
+ await store.send();assert.equal(store.pendingSend,undefined);assert.equal(store.draft,'invalid');assert.ok(!store.error.includes('待核对'));
+ store.api.request=async()=>{throw new Error('socket closed');};await store.send();const id=store.pendingSend.id;await store.send();assert.equal(store.pendingSend.id,id);
+});
+await test('duplicate stop taps submit only one interrupt and release the control after completion',async()=>{
+ const store=new AppStore();store.sessionID='s';store.active=false;let release,calls=0;store.api={request:()=>{calls++;return new Promise(r=>release=r);}};
+ const first=store.interrupt();await store.interrupt();assert.equal(calls,1);assert.equal(store.interrupting,true);release({});await first;assert.equal(store.interrupting,false);
+});
+
+await test('authentication-blocked sync never makes follow-up automatic history requests',async()=>{
+ const store=new AppStore();store.sessionID='s';store.networkBlocked=true;store.syncAgain=true;let calls=0;store.api={messages:async()=>{calls++;return{};}};
+ await store.sync();store.queueSync();assert.equal(calls,0);assert.equal(store.refreshTimer,-1);
+});
+await test('a pending snapshot started before background suspension cannot overwrite foreground state',async()=>{
+ const store=new AppStore();store.directory='/repo';const releases=[];store.api={request:async()=>({data:{}}),pending:()=>new Promise(r=>releases.push(r))};const read=store.refreshPending();
+ await Promise.resolve();await Promise.resolve();store.setActive(false);store.pendingItems=[pendingItem('kept')];releases.forEach(r=>r([pendingItem('late')]));await read;assert.equal(store.pendingItems[0].id,'kept');assert.equal(store.pendingBusy,false);
 });
 console.log(count + ' adapter/state tests passed.');

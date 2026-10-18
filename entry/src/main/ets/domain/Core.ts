@@ -66,7 +66,7 @@ export interface Interaction {
 }
 export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; useDedicatedTrust?: boolean; preferredModel?: string; }
 export interface ProjectItem { id: string; name: string; directory: string; }
-export interface SessionItem { id: string; title: string; directory: string; status: string; model: string; }
+export interface SessionItem { id: string; title: string; directory: string; status: string; model: string; updated?: number; archived?: boolean; }
 export interface ModelItem { id: string; label: string; }
 export interface FileItem { name: string; path: string; directory: boolean; }
 export interface DiffItem { path: string; patch: string; }
@@ -106,8 +106,10 @@ export function mergeMessages(previous: ChatMessage[], incoming: ChatMessage[], 
   const order: string[] = [];
   const first = older ? incoming : previous;
   const second = older ? previous : incoming;
-  first.concat(second).forEach((m: ChatMessage) => { if (order.indexOf(m.id) < 0) { order.push(m.id); } });
-  return order.map((id: string) => map.get(id) as ChatMessage);
+  const seen = new Set<string>();
+  first.concat(second).forEach((m: ChatMessage) => { if (!seen.has(m.id)) { seen.add(m.id); order.push(m.id); } });
+  const merged = order.map((id: string) => map.get(id) as ChatMessage);
+  return merged.length === previous.length && merged.every((m: ChatMessage, index: number) => m === previous[index]) ? previous : merged;
 }
 
 export function applyTextDelta(messages: ChatMessage[], id: string, ordinal: number, type: string,
@@ -307,4 +309,51 @@ export function interactionKey(item: Interaction): string {
   const text = interactionSnapshot(item);
   let hash = 2166136261; for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
   return item.id + ':' + (hash >>> 0);
+}
+
+export interface SessionPage { sessions: SessionItem[]; cursor: string; }
+export interface SessionPreference { id: string; pinned: boolean; archived: boolean; title?: string; directory?: string; }
+export interface PendingItem {
+  id: string; sessionID: string; directory: string; kind: string; title: string; sessionTitle: string; stale: boolean;
+}
+export interface PendingPrompt { id: string; sessionID: string; text: string; }
+export interface QuestionDraft { id: string; fields: FormField[]; }
+export interface ConversationDraft { text: string; pending?: PendingPrompt; forms?: QuestionDraft[]; }
+
+// Unsent text stays in memory, isolated by server, location and session. No chat history is persisted.
+export class ConversationMemory {
+  private drafts: Map<string, ConversationDraft> = new Map<string, ConversationDraft>();
+  private key(server: string, directory: string, session: string): string { return JSON.stringify([server, directory, session]); }
+  save(server: string, directory: string, session: string, text: string, pending?: PendingPrompt, forms: QuestionDraft[] = []): void {
+    const key = this.key(server, directory, session);
+    if (!text && !pending && !forms.length) { this.drafts.delete(key); return; }
+    if (!this.drafts.has(key) && this.drafts.size >= 100) { throw new Error('已暂存 100 个会话草稿，请先发送或清空部分草稿后再切换。'); }
+    this.drafts.set(key, { text: text, pending: pending, forms: forms });
+  }
+  read(server: string, directory: string, session: string): ConversationDraft {
+    return this.drafts.get(this.key(server, directory, session)) || { text: '' };
+  }
+  clearServer(server: string): void {
+    const prefix = JSON.stringify([server]).slice(0, -1) + ',';
+    Array.from(this.drafts.keys()).forEach((key: string) => { if (key.startsWith(prefix)) { this.drafts.delete(key); } });
+  }
+}
+export function pendingKey(item: PendingItem): string { return JSON.stringify([item.directory, item.sessionID, item.kind, item.id]); }
+export function sessionStatus(id: string, running: string[], pending: PendingItem[]): string {
+  const items = pending.filter((item: PendingItem) => item.sessionID === id);
+  if (items.some((item: PendingItem) => item.stale)) { return '待办待确认'; }
+  if (items.some((item: PendingItem) => item.kind === 'permission')) { return '等待审批'; }
+  if (items.length) { return '等待回答'; }
+  return running.indexOf(id) >= 0 ? '运行中' : '';
+}
+export function filterSessions(sessions: SessionItem[], preferences: SessionPreference[], search: string, archived: boolean): SessionItem[] {
+  const needle = search.trim().toLowerCase();
+  return sessions.filter((session: SessionItem) => {
+    const flag = preferences.find((p: SessionPreference) => p.id === session.id);
+    return (flag?.archived === true) === archived && (!needle || session.title.toLowerCase().indexOf(needle) >= 0);
+  }).sort((a: SessionItem, b: SessionItem) => {
+    const pinnedA = preferences.some((p: SessionPreference) => p.id === a.id && p.pinned);
+    const pinnedB = preferences.some((p: SessionPreference) => p.id === b.id && p.pinned);
+    return Number(pinnedB) - Number(pinnedA);
+  });
 }

@@ -4,7 +4,7 @@ import { Storage } from '../data/Storage';
 import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
-  DiffItem, TurnItem, TimelineEntry, groupTurns, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
+  DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
 
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
@@ -13,7 +13,8 @@ interface ModelRef { id: string; providerID: string; }
 interface ModelRequest { model: ModelRef; }
 interface AnswerRequest { answer: Record<string, FieldValue>; }
 interface PermissionReply { decision: string; }
-interface PendingSend { id: string; sessionID: string; text: string; }
+interface PendingScope { directory: string; kind: string; }
+interface PendingResult { scope: PendingScope; items: PendingItem[]; error: string; }
 @Observed
 export class AppStore {
   pane: string = 'chat';
@@ -26,6 +27,26 @@ export class AppStore {
   busy: boolean = false;
   projects: ProjectItem[] = [];
   sessions: SessionItem[] = [];
+  sessionCursor: string = '';
+  sessionQuery: string = '';
+  sessionsBusy: boolean = false;
+  sessionsError: string = '';
+  sessionPreferences: SessionPreference[] = [];
+  sessionPreferenceBusy: boolean = false;
+  sessionMutationBusy: boolean = false;
+  showArchived: boolean = false;
+  pendingItems: PendingItem[] = [];
+  pendingBusy: boolean = false;
+  pendingError: string = '';
+  pendingUpdated: number = 0;
+  runningSessions: string[] = [];
+  runningUnknown: boolean = false;
+  private preferenceEpoch: number = 0;
+  private conversationMemory: ConversationMemory = new ConversationMemory();
+  private sessionsEpoch: number = 0;
+  private pendingEpoch: number = 0;
+  private workspaceTimer: number = -1;
+  private streamEpoch: number = 0;
   directory: string = '';
   sessionID: string = '';
   sessionTitle: string = '';
@@ -61,6 +82,7 @@ export class AppStore {
   private tailLoaded: boolean = false;
   reviewLoaded: boolean = false;
   working: boolean = false;
+  interrupting: boolean = false;
   draft: string = '';
   manualPath: string = '';
   serverName: string = '';
@@ -70,7 +92,7 @@ export class AppStore {
   allowHttp: boolean = false;
   useDedicatedTrust: boolean = false;
   reviewTab: string = 'diff';
-  pendingSend: PendingSend | undefined = undefined;
+  pendingSend: PendingPrompt | undefined = undefined;
   private storage: Storage = new Storage();
   private api: Protocol | undefined = undefined;
   private generation: number = 0;
@@ -95,7 +117,159 @@ export class AppStore {
       if (server) { await this.connect(server); } }
     catch (e) { this.fail(e as Error); }
   }
-  private fail(error: Error): void { this.error = error.message || '操作失败，请重新连接'; }
+  private fail(error: Error): void {
+    this.error = error.message || '操作失败，请重新连接';
+    if (error instanceof ApiError && [401, 403, 495].indexOf(error.code) >= 0) {
+      this.networkBlocked = true; this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.stopNetwork();
+      this.pendingError = '连接校验失败，待办状态尚未确认';
+      this.pendingItems = this.pendingItems.map((p: PendingItem): PendingItem => ({ id: p.id, sessionID: p.sessionID, directory: p.directory, kind: p.kind, title: p.title, sessionTitle: p.sessionTitle, stale: true }));
+    }
+  }
+  private stashConversation(): boolean {
+    if (!this.connected || !this.sessionID) { return true; }
+    try { this.conversationMemory.save(this.connected, this.directory, this.sessionID, this.draft, this.pendingSend, this.questionDrafts()); return true; }
+    catch (e) { this.fail(e as Error); return false; }
+  }
+  private questionDrafts(): QuestionDraft[] { return this.interactions.filter((p: Interaction) => p.kind === 'form').map((p: Interaction): QuestionDraft => ({ id: p.id, fields: p.fields })); }
+  private clearSavedDraft(): void { this.conversationMemory.save(this.connected, this.directory, this.sessionID, '', undefined, this.questionDrafts()); }
+  sessionRows(search: string = ''): SessionItem[] {
+    const sessions = this.sessions.slice();
+    this.sessionPreferences.forEach((p: SessionPreference) => {
+      if (p.directory === this.directory && p.title && !sessions.some((s: SessionItem) => s.id === p.id)) {
+        sessions.push({ id: p.id, title: p.title, directory: p.directory, status: 'idle', model: '' });
+      }
+    });
+    return filterSessions(sessions, this.sessionPreferences, search || this.sessionQuery, this.showArchived);
+  }
+  sessionLabel(id: string): string {
+    const label = sessionStatus(id, this.runningSessions, this.pendingItems);
+    return label === '运行中' && this.runningUnknown ? '运行状态待确认' : label;
+  }
+  isPinned(id: string): boolean { return this.sessionPreferences.some((p: SessionPreference) => p.id === id && p.pinned); }
+  isArchived(id: string): boolean { return this.sessionPreferences.some((p: SessionPreference) => p.id === id && p.archived); }
+  async setSessionPreference(id: string, pinned: boolean, archived: boolean): Promise<void> {
+    if (!this.connected || this.sessionPreferenceBusy || this.sessionMutationBusy) { return; }
+    const server = this.connected; const epoch = ++this.preferenceEpoch; this.sessionPreferenceBusy = true; this.error = '';
+    const flags = this.sessionPreferences.filter((p: SessionPreference) => p.id !== id);
+    const session = this.sessions.find((s: SessionItem) => s.id === id); const previous = this.sessionPreferences.find((p: SessionPreference) => p.id === id);
+    if (pinned || archived) { flags.push({ id: id, pinned: pinned, archived: archived, title: session?.title || previous?.title, directory: session?.directory || previous?.directory }); }
+    try { await this.storage.saveSessionPreferences(server, flags); if (server === this.connected && epoch === this.preferenceEpoch) {
+      this.sessionPreferences = flags;
+      if (!archived && previous?.directory === this.directory && previous.title && !this.sessions.some((s: SessionItem) => s.id === id)) {
+        const restored: SessionItem = { id: id, title: previous.title, directory: previous.directory, status: 'idle', model: '' };
+        this.sessions = [restored].concat(this.sessions).slice(0, 500);
+      }
+    } }
+    catch (e) { if (server === this.connected && epoch === this.preferenceEpoch) { this.fail(e as Error); } }
+    finally { if (server === this.connected && epoch === this.preferenceEpoch) { this.sessionPreferenceBusy = false; } }
+  }
+  async renameSession(id: string, title: string): Promise<boolean> {
+    if (!this.api || this.sessionMutationBusy || this.sessionPreferenceBusy) { return false; }
+    const value = title.trim(); this.error = '';
+    if (!value || value.length > 200) { this.error = '会话名称需为 1 至 200 个字符'; return false; }
+    const api = this.api; const server = this.connected; this.sessionMutationBusy = true;
+    try {
+      await api.renameSession(id, value);
+      if (api !== this.api || server !== this.connected) { return false; }
+      this.sessions = this.sessions.map((s: SessionItem): SessionItem => s.id === id ? { id: s.id, title: value, directory: s.directory, status: s.status, model: s.model, updated: s.updated, archived: s.archived } : s);
+      if (this.sessionID === id) { this.sessionTitle = value; }
+      if (this.sessionPreferences.some((p: SessionPreference) => p.id === id)) {
+        this.sessionPreferences = this.sessionPreferences.map((p: SessionPreference): SessionPreference => ({ id: p.id, pinned: p.pinned, archived: p.archived, directory: p.directory, title: p.id === id ? value : p.title }));
+        try { await this.storage.saveSessionPreferences(server, this.sessionPreferences); }
+        catch (_) { if (api === this.api) { this.error = '名称已在服务器更新，本机书签名称暂未保存。'; } }
+        if (api !== this.api) { return false; }
+      }
+      this.pendingItems = this.pendingItems.map((item: PendingItem): PendingItem => ({ id: item.id, sessionID: item.sessionID, directory: item.directory, kind: item.kind, title: item.title, sessionTitle: item.sessionID === id ? value : item.sessionTitle, stale: item.stale }));
+      return true;
+    } catch (e) { if (api === this.api) { this.fail(e as Error); } return false; }
+    finally { if (api === this.api) { this.sessionMutationBusy = false; } }
+  }
+  async refreshSessions(older: boolean = false, search: string = this.sessionQuery): Promise<void> {
+    if (!this.api || !this.directory || (older && (this.sessionsBusy || !this.sessionCursor || this.sessions.length >= 500))) { return; }
+    const api = this.api; const directory = this.directory; const epoch = ++this.sessionsEpoch;
+    const query = search.trim().slice(0, 200); const cursor = older ? this.sessionCursor : '';
+    this.sessionsBusy = true; this.sessionsError = '';
+    try {
+      const page = await api.sessionPage(directory, cursor, query);
+      if (api !== this.api || directory !== this.directory || epoch !== this.sessionsEpoch) { return; }
+      const byID = new Map<string, SessionItem>();
+      (older ? this.sessions.concat(page.sessions) : page.sessions).forEach((s: SessionItem) => byID.set(s.id, s));
+      this.sessions = Array.from(byID.values()).slice(0, 500); this.sessionCursor = page.cursor; this.sessionQuery = query;
+    } catch (e) { if (api === this.api && epoch === this.sessionsEpoch) { this.sessionsError = (e as Error).message; this.fail(e as Error); } }
+    finally { if (epoch === this.sessionsEpoch) { this.sessionsBusy = false; } }
+  }
+  private queueWorkspace(): void {
+    if (this.workspaceTimer >= 0 || !this.active || !this.api || this.networkBlocked) { return; }
+    this.workspaceTimer = setTimeout(() => { this.workspaceTimer = -1; this.refreshPending(); }, 600);
+  }
+  private async readPending(api: Protocol, scope: PendingScope): Promise<PendingResult> {
+    try { return { scope: scope, items: await api.pending(scope.directory, scope.kind), error: '' }; }
+    catch (e) { if (api === this.api && e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { this.fail(e as Error); } return { scope: scope, items: [], error: (e as Error).message || '读取失败' }; }
+  }
+  async refreshPending(force: boolean = false): Promise<void> {
+    if (!this.api || !this.active || this.networkBlocked || (this.pendingBusy && !force)) { return; }
+    const api = this.api; const epoch = ++this.pendingEpoch; this.pendingBusy = true;
+    const directories: string[] = [];
+    [this.directory].concat(this.projects.map((p: ProjectItem) => p.directory), this.pendingItems.map((p: PendingItem) => p.directory))
+      .forEach((directory: string) => { if (directory && directories.indexOf(directory) < 0) { directories.push(directory); } });
+    const scopes: PendingScope[] = []; directories.slice(0, 64).forEach((directory: string) => {
+      scopes.push({ directory: directory, kind: 'form' }, { directory: directory, kind: 'permission' });
+    });
+    let next = this.pendingItems.slice(); const errors: string[] = []; let truncated = directories.length > 64;
+    try {
+      try {
+        const active = object(object(await api.request('/api/session/active'))['data']);
+        if (api !== this.api || epoch !== this.pendingEpoch) { return; }
+        this.runningSessions = Object.keys(active); this.runningUnknown = false;
+      } catch (e) {
+        if (api !== this.api || epoch !== this.pendingEpoch) { return; }
+        this.runningUnknown = true; errors.push('运行状态读取失败');
+        if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { this.fail(e as Error); return; }
+      }
+      for (let i = 0; i < scopes.length; i += 6) {
+        const results = await Promise.all(scopes.slice(i, i + 6).map((scope: PendingScope): Promise<PendingResult> => this.readPending(api, scope)));
+        if (api !== this.api || epoch !== this.pendingEpoch) { return; }
+        results.forEach((result: PendingResult) => {
+          const retained = next.filter((p: PendingItem) => p.directory === result.scope.directory && p.kind === result.scope.kind);
+          next = next.filter((p: PendingItem) => p.directory !== result.scope.directory || p.kind !== result.scope.kind);
+          if (result.error) {
+            errors.push(result.scope.directory + '：' + (result.scope.kind === 'form' ? '问题' : '审批') + '读取失败');
+            retained.forEach((p: PendingItem) => next.push({ id: p.id, sessionID: p.sessionID, directory: p.directory, kind: p.kind, title: p.title, sessionTitle: p.sessionTitle, stale: true }));
+          } else { next = next.concat(result.items); }
+        });
+        if (this.networkBlocked) { return; }
+      }
+      const unique = new Map<string, PendingItem>();
+      next.forEach((p: PendingItem) => unique.set(pendingKey(p), { id: p.id, sessionID: p.sessionID, directory: p.directory, kind: p.kind,
+        title: p.title, sessionTitle: this.sessions.find((s: SessionItem) => s.id === p.sessionID)?.title || p.sessionTitle, stale: p.stale }));
+      if (unique.size > 500) { truncated = true; }
+      this.pendingItems = Array.from(unique.values()).slice(0, 500);
+      this.pendingError = errors.join('；') + (truncated ? '。显示范围已达上限，请打开对应项目单独处理。' : '');
+      this.pendingUpdated = Date.now();
+    } finally { if (epoch === this.pendingEpoch) { this.pendingBusy = false; } }
+  }
+  async openPending(item: PendingItem): Promise<void> {
+    if (!this.api || this.busy) { return; }
+    const api = this.api; const server = this.connected; this.error = ''; this.busy = true;
+    try {
+      const generation = this.generation;
+      const session = await api.session(item.sessionID);
+      if (generation !== this.generation || api !== this.api || server !== this.connected) { return; }
+      const directory = session.directory || item.directory;
+      if (directory !== this.directory) {
+        await this.selectProject(session.directory || item.directory);
+        if (api !== this.api || server !== this.connected || this.sessionsError) { return; }
+      }
+      if (this.directory !== directory) { return; }
+      await this.openSession(session);
+      this.queueWorkspace();
+    } catch (e) { if (api === this.api) { this.fail(e as Error); } }
+    finally { if (api === this.api) { this.busy = false; } }
+  }
+  async reconnect(): Promise<void> {
+    const server = this.servers.find((s: ServerConfig) => s.id === this.connected);
+    if (server && !this.busy) { await this.connect(server); }
+  }
   private sessionPath(): string { return '/api/session/' + encodeURIComponent(this.sessionID); }
   private savePosition(): void {
     if (this.connected) { this.storage.position(this.connected, this.directory, this.sessionID).catch((e: Error) => this.fail(e)); }
@@ -115,23 +289,27 @@ export class AppStore {
     } catch (e) { this.fail(e as Error); }
   }
   async removeServer(id: string): Promise<void> {
-    if (id === this.connected) { this.disconnect(); }
+    if (id === this.connected && !this.disconnect()) { return; }
     try {
       await this.storage.saveSecret(id, '');
       this.servers = this.servers.filter((s: ServerConfig) => s.id !== id);
-      await this.storage.saveServers(this.servers);
+      await this.storage.saveServers(this.servers); this.conversationMemory.clearServer(id);
     } catch (e) { this.fail(e as Error); }
   }
-  disconnect(): void {
+  disconnect(): boolean {
+    if (!this.stashConversation()) { return false; }
+    this.pendingEpoch++; this.sessionsEpoch++; this.preferenceEpoch++; this.pendingItems = []; this.pendingError = ''; this.pendingUpdated = 0; this.pendingBusy = false;
+    this.sessionCursor = ''; this.sessionQuery = ''; this.sessionsBusy = false; this.sessionsError = ''; this.sessionPreferences = [];
+    this.sessionMutationBusy = false; this.sessionPreferenceBusy = false; this.runningSessions = []; this.runningUnknown = false; this.showArchived = false;
     this.providers.attach(undefined, '', async (): Promise<void> => {});
     this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接';
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
-    this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false;
-    this.pendingSend = undefined; this.draft = ''; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false;
+    this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false; this.interrupting = false;
+    this.pendingSend = undefined; this.draft = ''; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false; return true;
   }
   async connect(config: ServerConfig): Promise<void> {
-    this.disconnect(); const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true;
+    if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true;
     try {
       const password = await this.storage.secret(config.id);
       if (generation !== this.generation) { return; }
@@ -140,28 +318,35 @@ export class AppStore {
       const version = string(info['version']);
       if (!version.startsWith('2.')) { throw new ApiError(0, '此版本仅支持 OpenCode V2。服务器版本：' + (version || '未知')); }
       const projects = await api.projects();
+      const flags = await this.storage.sessionPreferences(config.id);
       if (generation !== this.generation) { return; }
-      this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects;
+      this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects; this.sessionPreferences = flags;
       this.storage.rememberServer(config.id).catch((e: Error) => this.fail(e));
       this.status = '已连接'; this.pane = 'chat'; this.attempts = 0; this.openStream();
       this.pollTimer = setInterval(() => {
         if (this.active) {
           this.sync().catch((e: Error) => this.fail(e));
+          if (Date.now() - this.pendingUpdated > 15000) { this.refreshPending(); }
           if (Date.now() - this.lastData > 45000) { this.streamClose?.(); this.openStream(); }
         }
       }, 5000);
+      this.queueWorkspace();
       const last = await this.storage.last(config.id);
       if (generation !== this.generation) { return; }
       if (last.length > 0 && last[0]) {
         await this.selectProject(last[0]);
-        if (last[1] && this.sessions.some((s: SessionItem) => s.id === last[1])) {
-          await this.openSession(this.sessions.find((s: SessionItem) => s.id === last[1]) as SessionItem);
+        if (api !== this.api || this.sessionsError) { return; }
+        if (last[1]) {
+          const session = this.sessions.find((s: SessionItem) => s.id === last[1]) || await api.session(last[1]);
+          if (api === this.api && session.directory === this.directory) { await this.openSession(session); }
         }
       }
     } catch (e) { if (generation === this.generation) { this.status = '连接失败'; this.fail(e as Error); } }
     finally { if (generation === this.generation) { this.busy = false; } }
   }
   private stopNetwork(): void {
+    this.streamEpoch++;
+    if (this.workspaceTimer >= 0) { clearTimeout(this.workspaceTimer); this.workspaceTimer = -1; }
     this.streamClose?.(); this.streamClose = undefined;
     if (this.pollTimer >= 0) { clearInterval(this.pollTimer); this.pollTimer = -1; }
     if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); this.retryTimer = -1; }
@@ -170,19 +355,21 @@ export class AppStore {
   setActive(active: boolean): void {
     this.active = active; this.providers.setActive(active);
     if (!active) {
-      this.streamClose?.(); this.streamClose = undefined;
+      this.pendingEpoch++; this.pendingBusy = false;
+      this.streamEpoch++; this.streamClose?.(); this.streamClose = undefined;
+      if (this.workspaceTimer >= 0) { clearTimeout(this.workspaceTimer); this.workspaceTimer = -1; }
       if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); this.retryTimer = -1; }
       if (!this.networkBlocked) { this.status = this.api ? '后台暂停连接' : '未连接'; }
-    } else if (this.api && !this.networkBlocked) { this.openStream(); this.queueSync(); }
+    } else if (this.api && !this.networkBlocked) { this.openStream(); this.queueSync(); this.queueWorkspace(); }
   }
   private openStream(): void {
     if (!this.api || !this.active || this.networkBlocked || this.status === '认证失败' || this.status === '证书校验失败') { return; }
     if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); this.retryTimer = -1; }
-    this.streamClose?.(); const generation = this.generation; this.lastData = Date.now();
+    this.streamClose?.(); const streamEpoch = ++this.streamEpoch; const generation = this.generation; this.lastData = Date.now();
     this.streamClose = this.api.stream((frame: SseFrame) => {
-      if (generation === this.generation && this.active) { this.onFrame(frame); }
-    }, () => { if (generation === this.generation) { this.lastData = Date.now(); } }, (error: Error) => {
-      if (generation !== this.generation || !this.active) { return; }
+      if (generation === this.generation && streamEpoch === this.streamEpoch && this.active) { this.onFrame(frame); }
+    }, () => { if (generation === this.generation && streamEpoch === this.streamEpoch) { this.lastData = Date.now(); } }, (error: Error) => {
+      if (generation !== this.generation || streamEpoch !== this.streamEpoch || !this.active) { return; }
       if (error instanceof ApiError && (error.code === 401 || error.code === 403 || error.code === 495)) {
         this.networkBlocked = true; this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.error = error.message; this.stopNetwork(); return;
       }
@@ -200,8 +387,11 @@ export class AppStore {
     if (id) { this.eventIDs.push(id); if (this.eventIDs.length > 4096) { this.eventIDs.shift(); } }
     if (type === 'server.connected') { this.status = '实时连接'; this.attempts = 0; this.queueSync(); return; }
     const location = string(object(event['location'])['directory']);
-    if (location && location !== this.directory) { return; }
     const data = object(event['data']); const sessionID = string(data['sessionID'], string(object(data['form'])['sessionID']));
+    if (sessionID && type === 'session.idle') { this.runningSessions = this.runningSessions.filter((id: string) => id !== sessionID); }
+    else if (sessionID && /^session\.(text|reasoning)\./.test(type) && this.runningSessions.indexOf(sessionID) < 0) { this.runningSessions = this.runningSessions.concat([sessionID]); }
+    if (/^(form\.|permission\.|session\.(idle|created|updated|removed))/.test(type)) { this.queueWorkspace(); }
+    if (location && location !== this.directory) { return; }
     if (!sessionID || sessionID !== this.sessionID) { return; }
     this.eventEpoch++;
     if (/^session\.(text|reasoning)\.(delta|ended)$/.test(type)) {
@@ -220,27 +410,31 @@ export class AppStore {
     }
   }
   private queueSync(): void {
+    if (!this.api || !this.active || this.networkBlocked) { return; }
     if (this.refreshTimer >= 0) { return; }
     this.refreshTimer = setTimeout(() => { this.refreshTimer = -1; this.sync().catch((e: Error) => this.fail(e)); }, 200);
   }
   async selectProject(directory: string): Promise<void> {
     if (!this.api || !directory.trim()) { return; }
+    if (!this.stashConversation()) { return; }
+    this.sessionsEpoch++; this.sessionCursor = ''; this.sessionQuery = ''; this.sessionsBusy = false; this.sessionsError = ''; this.showArchived = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
     this.providers.attach(api, directory.trim(), async (): Promise<void> => { await this.refreshModels(); });
-    this.pendingSend = undefined; this.draft = ''; this.directory = directory.trim(); this.sessionID = ''; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
-    this.fileContent = ''; this.filePath = ''; this.cursor = ''; this.error = ''; this.busy = true; this.syncing = false;
+    this.pendingSend = undefined; this.draft = ''; this.directory = directory.trim(); this.sessionID = ''; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
+    this.fileContent = ''; this.filePath = ''; this.files = []; this.fileTruncated = false; this.cursor = ''; this.tailLoaded = false; this.readingHistory = false; this.newerAvailable = false; this.transcriptEpoch++; this.error = ''; this.busy = true; this.syncing = false;
     try {
       await api.request('/api/location?' + api.scope(this.directory));
-      const sessions = await api.sessions(this.directory);
+      const page = await api.sessionPage(this.directory);
       const models = await api.models(this.directory);
       if (generation !== this.generation) { return; }
-      this.sessions = sessions; this.models = models; this.manualPath = this.directory; this.pane = 'projects';
-      this.savePosition(); this.openStream();
-    } catch (e) { if (generation === this.generation) { this.fail(e as Error); this.openStream(); } }
+      this.sessions = page.sessions; this.sessionCursor = page.cursor; this.models = models; this.manualPath = this.directory; this.pane = 'projects';
+      this.savePosition(); this.openStream(); this.queueWorkspace();
+    } catch (e) { if (generation === this.generation) { this.sessionsError = (e as Error).message; this.fail(e as Error); this.openStream(); } }
     finally { if (generation === this.generation) { this.busy = false; } }
   }
   async createSession(): Promise<void> {
     if (!this.api || !this.directory || this.busy) { return; }
+    if (!this.stashConversation()) { return; }
     const generation = this.generation; this.busy = true;
     const preferred = this.servers.find((s: ServerConfig) => s.id === this.connected)?.preferredModel || '';
     try {
@@ -255,15 +449,22 @@ export class AppStore {
     } catch (e) { this.fail(e as Error); } finally { this.busy = false; }
   }
   async openSession(session: SessionItem): Promise<void> {
-    if (!this.api) { return; }
+    if (!this.api || !this.stashConversation()) { return; }
+    const api = this.api;
+    if (session.directory && session.directory !== this.directory) {
+      await this.selectProject(session.directory);
+      if (api !== this.api || this.directory !== session.directory || this.sessionsError) { return; }
+    }
     this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model;
     this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
-    this.draft = ''; this.working = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); await this.sync();
+    const saved = this.conversationMemory.read(this.connected, this.directory, session.id);
+    this.draft = saved.text; this.pendingSend = saved.pending; this.working = false; this.interrupting = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); this.queueWorkspace();
+    const generation = this.generation; this.busy = true; await this.sync(); if (generation === this.generation) { this.busy = false; }
   }
   async sync(): Promise<void> {
-    if (!this.api || !this.sessionID || !this.active) { return; }
+    if (!this.api || !this.sessionID || !this.active || this.networkBlocked) { return; }
     if (this.syncing) { this.syncAgain = true; return; }
     this.syncing = true; const generation = this.generation; const api = this.api;
     const id = this.sessionID; const epoch = this.eventEpoch; const transcript = this.transcriptEpoch;
@@ -283,19 +484,20 @@ export class AppStore {
       if (this.readingHistory) {
         if (safe.some((m: ChatMessage) => !this.messages.some((old: ChatMessage) => old.id === m.id))) { this.newerAvailable = true; }
         this.messages = mergeMessages(this.messages, safe.filter((m: ChatMessage) => this.messages.some((old: ChatMessage) => old.id === m.id)));
-      } else { this.messages = mergeMessages(this.messages, safe).slice(-300); }
+      } else { const merged = mergeMessages(this.messages, safe); this.messages = merged.length > 300 ? merged.slice(-300) : merged; }
       if (!this.tailLoaded) { this.cursor = string(object(object(response)['cursor'])['next']); this.tailLoaded = true; }
-      if (this.pendingSend && incoming.some((m: ChatMessage) => m.id === this.pendingSend?.id)) { this.pendingSend = undefined; this.draft = ''; }
+      if (this.pendingSend && incoming.some((m: ChatMessage) => m.id === this.pendingSend?.id)) { this.pendingSend = undefined; this.draft = ''; this.clearSavedDraft(); }
       await this.syncInteractions(api, id, 'form', generation);
       await this.syncInteractions(api, id, 'permission', generation);
       const active = object(object(await api.request('/api/session/active'))['data']);
       const detail = object(object(await api.request('/api/session/' + encodeURIComponent(id)))['data']);
       const inbox = rows(await api.request('/api/session/' + encodeURIComponent(id) + '/inbox'));
       if (generation === this.generation) {
+        this.runningSessions = Object.keys(active);
         const title = string(detail['title'], this.sessionTitle);
         if (title !== this.sessionTitle) {
           this.sessionTitle = title;
-          this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model }));
+          this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model, updated: item.updated, archived: item.archived }));
         }
         if (active[id] !== undefined || inbox.length > 0) { this.working = true; }
         else if (detail['outcome']) { this.working = false; }
@@ -320,12 +522,17 @@ export class AppStore {
     try {
       const incoming = await api.interactions(id, kind, this.directory);
       if (generation !== this.generation || (kind === 'permission' && epoch !== this.permissionEpoch)) { return; }
+      const savedForms = this.conversationMemory.read(this.connected, this.directory, id).forms || [];
       const next = incoming.map((item: Interaction): Interaction => {
         const old = this.interactions.find((p: Interaction) => p.id === item.id);
+        const saved = kind === 'form' ? savedForms.find((p: QuestionDraft) => p.id === item.id) : undefined;
+        if (!old && saved) { return { id: item.id, sessionID: item.sessionID, kind: item.kind, title: item.title, detail: item.detail, approval: item.approval,
+          fields: mergeFormDraft(item.fields, saved.fields), state: 'pending' }; }
         return old ? { id: item.id, sessionID: item.sessionID, kind: item.kind, title: item.title, detail: item.detail, approval: item.approval,
           fields: mergeFormDraft(item.fields, old.fields), state: old.state === 'submitting' ? 'submitting' : 'pending' } : item;
       });
-      this.interactions = this.interactions.filter((p: Interaction) => p.kind !== kind).concat(next);
+      const combined = this.interactions.filter((p: Interaction) => p.kind !== kind).concat(next);
+      if (JSON.stringify(this.interactions) !== JSON.stringify(combined)) { this.interactions = combined; }
       if (kind === 'permission') { this.permissionError = ''; }
     } catch (e) {
       if (generation === this.generation && (kind !== 'permission' || epoch === this.permissionEpoch)) {
@@ -358,7 +565,7 @@ export class AppStore {
   }
   async send(): Promise<void> {
     if (!this.api || !this.sessionID || this.busy || (!this.draft.trim() && !this.pendingSend)) { return; }
-    const pending: PendingSend = this.pendingSend || {
+    const pending: PendingPrompt = this.pendingSend || {
       id: 'msg_' + Date.now().toString(36) + Math.random().toString(36).slice(2),
       sessionID: this.sessionID, text: this.draft.trim()
     };
@@ -367,16 +574,22 @@ export class AppStore {
       await this.api.request(this.sessionPath() + '/prompt', http.RequestMethod.POST,
         { id: pending.id, text: pending.text, delivery: 'steer', resume: true } as PromptRequest);
       if (generation !== this.generation) { return; }
-      this.pendingSend = undefined; this.draft = ''; this.working = true; if (this.readingHistory) { await this.latest(); } else { await this.sync(); }
+      this.pendingSend = undefined; this.draft = ''; this.clearSavedDraft(); this.working = true; if (this.readingHistory) { await this.latest(); } else { await this.sync(); }
     } catch (e) {
-      if (generation === this.generation) { this.fail(e as Error); this.error += '。发送结果待核对，重试将使用同一消息 ID'; }
+      if (generation === this.generation) {
+        this.fail(e as Error);
+        if (e instanceof ApiError && [400, 401, 403, 404, 405, 413, 422, 495].indexOf(e.code) >= 0) {
+          this.pendingSend = undefined; this.draft = pending.text; this.stashConversation();
+        } else { this.error += '。发送结果待核对，重试将使用同一消息 ID'; }
+      }
     } finally { if (generation === this.generation) { this.busy = false; } }
   }
   async interrupt(): Promise<void> {
-    if (!this.api) { return; }
-    const generation = this.generation;
+    if (!this.api || !this.sessionID || this.interrupting) { return; }
+    const generation = this.generation; this.interrupting = true;
     try { await this.api.request(this.sessionPath() + '/interrupt', http.RequestMethod.POST); if (generation === this.generation) { await this.sync(); } }
     catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
+    finally { if (generation === this.generation) { this.interrupting = false; } }
   }
   async chooseModel(id: string): Promise<void> {
     if (!this.api || !this.sessionID) { return; }
@@ -449,7 +662,7 @@ export class AppStore {
       if (item.kind === 'form' && reject) { await api.request(base + scope, http.RequestMethod.DELETE); }
       else { await api.request(base + '/reply' + scope, http.RequestMethod.POST,
         item.kind === 'form' ? { answer: answer } as AnswerRequest : { decision: reject ? 'reject' : 'once' } as PermissionReply); }
-      if (generation === this.generation) { this.interactions = this.interactions.filter((p: Interaction) => p.id !== item.id); await this.sync(); }
+      if (generation === this.generation) { this.interactions = this.interactions.filter((p: Interaction) => p.id !== item.id); this.stashConversation(); this.queueWorkspace(); await this.sync(); }
     } catch (e) {
       if (generation === this.generation) {
         this.fail(e as Error); this.interactionState(item.id, 'error');

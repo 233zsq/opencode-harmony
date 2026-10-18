@@ -3,7 +3,7 @@ import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { DEDICATED_CA, DEDICATED_SPKI } from './DedicatedTrust';
 import { ChatMessage, TextPart, ToolItem, SseParser, SseFrame, ServerConfig, ProjectItem, SessionItem,
-  TimelineEntry, ModelItem, Interaction, FormField, Choice, FileItem, DiffItem, FieldValue, FormCondition, FieldConstraints, ApprovalPreview, ApprovalFile, previewText } from '../domain/Core';
+  SessionPage, PendingItem, TimelineEntry, ModelItem, Interaction, FormField, Choice, FileItem, DiffItem, FieldValue, FormCondition, FieldConstraints, ApprovalPreview, ApprovalFile, previewText } from '../domain/Core';
 
 export type Json = Record<string, Object>;
 export function object(value: Object | undefined | null): Json { return value ? value as Json : {}; }
@@ -36,6 +36,7 @@ export function parseFields(value: Object | undefined): FormField[] {
   return fields;
 }
 
+interface RenameSessionRequest { title: string; }
 interface ApprovalPatchInput { file: string; patch: string; }
 
 export function parseApproval(request: Json): ApprovalPreview {
@@ -130,14 +131,35 @@ export class Protocol {
       return { id: string(p['id']), name: string(p['name'], directory.split('/').pop() || directory), directory: directory };
     });
   }
-  async sessions(directory: string): Promise<SessionItem[]> {
-    return rows(await this.request('/api/session?directory=' + encodeURIComponent(directory) + '&limit=50&order=desc'))
-      .map((v: Object): SessionItem => {
-        const s = object(v); const location = object(s['location']); const model = object(s['model']);
-        return { id: string(s['id']), title: string(s['title'], '未命名会话'),
-          directory: string(location['directory'], directory), status: 'idle',
-          model: string(model['providerID']) + '/' + string(model['id']) };
-      });
+  parseSession(value: Object, directory: string = ''): SessionItem {
+    const s = object(value); const location = object(s['location']); const model = object(s['model']);
+    return { id: string(s['id']), title: string(s['title'], '未命名会话'), directory: string(location['directory'], directory),
+      status: 'idle', model: model['id'] ? string(model['providerID']) + '/' + string(model['id']) : '',
+      updated: Number(object(s['time'])['updated']) || 0, archived: !!object(s['time'])['archived'] };
+  }
+  async session(id: string): Promise<SessionItem> {
+    const session = this.parseSession(object(await this.request('/api/session/' + encodeURIComponent(id)))['data']);
+    if (session.id !== id) { throw new ApiError(0, '服务器返回的会话标识不匹配'); }
+    return session;
+  }
+  async sessionPage(directory: string, cursor: string = '', search: string = ''): Promise<SessionPage> {
+    const query = cursor ? 'cursor=' + encodeURIComponent(cursor) : 'order=desc' +
+      (directory ? '&directory=' + encodeURIComponent(directory) : '') + (search.trim() ? '&search=' + encodeURIComponent(search.trim()) : '');
+    const response = await this.request('/api/session?limit=50&' + query);
+    return { sessions: rows(response).map((v: Object): SessionItem => this.parseSession(v, directory)).filter((s: SessionItem) => !!s.id),
+      cursor: string(object(object(response)['cursor'])['next']) };
+  }
+  async sessions(directory: string): Promise<SessionItem[]> { return (await this.sessionPage(directory)).sessions; }
+  async renameSession(id: string, title: string): Promise<void> {
+    await this.request('/api/session/' + encodeURIComponent(id), 'PATCH' as http.RequestMethod, { title: title } as RenameSessionRequest);
+  }
+  async pending(directory: string, kind: string): Promise<PendingItem[]> {
+    const response = await this.request((kind === 'form' ? '/api/form?' : '/api/permission/request?') + this.scope(directory));
+    return rows(response).map((v: Object): PendingItem => {
+      const p = object(v);
+      return { id: string(p['id']), sessionID: string(p['sessionID']), directory: directory, kind: kind,
+        title: string(p['title'], string(p['action'], kind === 'form' ? '需要回答' : '需要审批')), sessionTitle: '', stale: false };
+    }).filter((p: PendingItem) => !!p.id && !!p.sessionID);
   }
   async models(directory: string): Promise<ModelItem[]> {
     return rows(await this.request('/api/model?' + this.scope(directory))).map((v: Object): ModelItem => {

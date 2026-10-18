@@ -120,4 +120,30 @@ test('external form requires user confirmation but is omitted from server answer
   const field={key:'external',label:'External step',type:'external',options:[],values:[],text:'',required:false};
   assert.throws(()=>core.buildFormAnswer([field]));field.text='true';assert.deepEqual(core.buildFormAnswer([field]),{});
 });
+
+test('conversation drafts and unconfirmed prompt IDs are isolated by server, directory and session', () => {
+  const memory=new core.ConversationMemory();const pending={id:'same-prompt',sessionID:'s',text:'immutable'};
+  memory.save('one','/repo','s','draft',pending);
+  assert.equal(memory.read('two','/repo','s').text,'');assert.equal(memory.read('one','/other','s').text,'');
+  assert.equal(memory.read('one','/repo','s').pending.id,'same-prompt');
+  memory.clearServer('one');assert.equal(memory.read('one','/repo','s').text,'');
+});
+test('draft capacity refuses a switch instead of evicting unsent work and clearing frees the slot',()=>{
+ const memory=new core.ConversationMemory();for(let i=0;i<100;i++)memory.save('a','/r','s'+i,'unsent '+i);
+ assert.throws(()=>memory.save('a','/r','overflow','new'),/100/);assert.equal(memory.read('a','/r','s0').text,'unsent 0');
+ memory.save('a','/r','s0','');memory.save('a','/r','overflow','new');assert.equal(memory.read('a','/r','overflow').text,'new');
+});
+test('pinned and archived sessions are filtered independently without mutating server history',()=>{
+ const sessions=[{id:'a',title:'Alpha'},{id:'b',title:'Beta'},{id:'c',title:'Gamma'}];const flags=[{id:'b',pinned:true,archived:false},{id:'c',pinned:false,archived:true}];
+ assert.deepEqual(core.filterSessions(sessions,flags,'',false).map(s=>s.id),['b','a']);assert.deepEqual(core.filterSessions(sessions,flags,'GAM',true).map(s=>s.id),['c']);assert.equal(sessions.length,3);
+});
+test('sidebar waiting status preserves failed-read uncertainty ahead of running status',()=>{
+ const item={id:'p',sessionID:'s',kind:'permission',stale:false};assert.equal(core.sessionStatus('s',['s'],[item]),'等待审批');
+ assert.equal(core.sessionStatus('s',['s'],[{...item,stale:true}]),'待办待确认');assert.equal(core.sessionStatus('s',['s'],[]),'运行中');
+});
+test('unchanged message polls preserve array and object identity',()=>{
+ const old=[{id:'a',role:'assistant',text:'answer',reasoning:'',parts:[],tools:[],state:'completed'}];
+ assert.equal(core.mergeMessages(old,[{...old[0]}]),old);
+ assert.notEqual(core.mergeMessages(old,[{...old[0],text:'changed'}]),old);
+});
 console.log(count + ' core tests passed.');
