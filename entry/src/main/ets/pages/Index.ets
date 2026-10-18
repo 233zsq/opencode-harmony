@@ -1,3 +1,8 @@
+import { DiffContent } from '../components/DiffContent';
+import { Attachment, attachmentProblem } from '../domain/Attachments';
+import { AttachmentPicker } from '../data/AttachmentPicker';
+import { AttachmentStrip } from '../components/AttachmentStrip';
+import { AttachmentPreview } from '../components/AttachmentPreview';
 import { copyText } from '../presentation/Clipboard';
 import { Appearance } from '../presentation/Appearance';
 import { SymbolGlyphModifier, KeyboardAvoidMode } from '@kit.ArkUI';
@@ -19,6 +24,37 @@ struct Index {
   @State @Watch('storeChanged') store: AppStore = new AppStore();
   @StorageLink('appForeground') @Watch('foregroundChanged') foreground: boolean = true;
   @State follow: boolean = true;
+  @State savingAttachment: boolean = false;
+  private toast(message: string): void { try { this.getUIContext().getPromptAction().showToast({ message: message }); } catch (_) {} }
+  private async saveAttachment(item: Attachment): Promise<void> {
+    if (this.savingAttachment) { return; } this.savingAttachment = true;
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      if (await new AttachmentPicker(context).save(item)) { this.toast('已保存文件'); }
+    } catch (_) { this.toast('文件未保存，请重试'); }
+    finally { this.savingAttachment = false; }
+  }
+  @State pickingAttachments: boolean = false;
+  @State selectedAttachment: Attachment = { id: '', name: '', mime: '', data: '', size: 0 };
+  private async pickAttachments(photos: boolean, retry?: Attachment): Promise<void> {
+    if (this.pickingAttachments || this.store.pendingSend || this.store.busy || !this.store.sessionID) { return; }
+    const scope = this.store.connected + '/' + this.store.directory + '/' + this.store.sessionID;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.pickingAttachments = true;
+    try {
+      const picker = new AttachmentPicker(context);
+      const items = retry?.uri ? [await picker.read(retry.uri, retry.id, retry.mime.startsWith('image/'))] : await picker.select(photos, 4 - this.store.attachments.length);
+      if (scope !== this.store.connected + '/' + this.store.directory + '/' + this.store.sessionID) { return; }
+      if (retry) { if (this.store.attachments.some((a: Attachment) => a.id === retry.id)) { this.store.replaceAttachment(items[0]); } }
+      else { this.store.addAttachments(items); }
+    } catch (_) { this.store.error = '未能打开附件选择器，请稍后重试'; }
+    finally { this.pickingAttachments = false; }
+  }
+  private async openAttachment(item: Attachment): Promise<void> {
+    const scope = this.store.connected + '/' + this.store.sessionID; this.selectedAttachment = item; this.sheetKind = 'attachment'; this.toolSheetOpen = true;
+    const preview = await this.store.attachmentPreview(item);
+    if (scope === this.store.connected + '/' + this.store.sessionID && this.sheetKind === 'attachment' && this.toolSheetOpen) { this.selectedAttachment = preview; }
+  }
   @StorageLink('appearanceMode') appearanceMode: string = 'system';
   @StorageLink('appearanceDark') darkAppearance: boolean = false;
   @State sidebarOpen: boolean = false;
@@ -53,7 +89,7 @@ struct Index {
   private storeChanged(): void {
     this.syncNavigation();
     const session = this.store.connected + '/' + this.store.sessionID;
-    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session') { this.toolSheetOpen = false; } this.follow = true; }
+    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment') { this.toolSheetOpen = false; } this.follow = true; }
     if (this.viewMessages === this.store.messages && this.viewInteractions === this.store.interactions) { return; }
     this.viewMessages = this.store.messages; this.viewInteractions = this.store.interactions;
     const active = this.store.messages.filter((m: ChatMessage) => reasoningInProgress(m)).map((m: ChatMessage) => m.id);
@@ -123,17 +159,17 @@ struct Index {
               if (this.store.connected === server.id) { this.badge('已连接') }
             }
             Row({ space: 10 }) {
-              Button('连接', { type: ButtonType.Capsule }).backgroundColor(C.accent).fontColor(C.on_accent)
+              Button('连接', { type: ButtonType.Capsule }).id('connect-server-' + server.id).backgroundColor(C.accent).fontColor(C.on_accent)
                 .borderRadius(9).height(36).layoutWeight(1).enabled(!this.store.busy)
                 .onClick(() => { this.store.connect(server).then(() => { if (this.store.connected) { this.store.pane = 'chat'; } }); })
-              Button('移除', { type: ButtonType.Capsule }).backgroundColor(C.field).fontColor(C.danger)
+              Button('移除', { type: ButtonType.Capsule }).id('remove-server-' + server.id).backgroundColor(C.field).fontColor(C.danger)
                 .borderRadius(9).height(36).onClick(() => { this.store.removeServer(server.id); })
             }
-          }.padding(16).backgroundColor(C.surface).borderRadius(16).width('100%')
+          }.id('server-profile-' + server.id).padding(16).backgroundColor(C.surface).borderRadius(16).width('100%')
         }, (server: ServerConfig) => server.id)
         Column({ space: 12 }) {
           Text('添加服务器').fontSize(18).fontWeight(FontWeight.Bold).fontColor(C.text).width('100%')
-          TextInput({ placeholder: '连接名称，例如：我的开发服务器', text: this.store.serverName })
+          TextInput({ placeholder: '连接名称，例如：我的开发服务器', text: this.store.serverName }).id('server-name')
             .onChange((value: string) => { this.store.serverName = value; }).backgroundColor(C.field).borderRadius(9).height(44)
           TextInput({ placeholder: 'https://opencode.example.com', text: this.store.serverUrl }).id('server-url')
             .onChange((value: string) => { this.store.serverUrl = value; }).backgroundColor(C.field).borderRadius(9).height(44)
@@ -229,7 +265,7 @@ struct Index {
     ConversationMessage({ message: message, thinking: reasoningInProgress(message), reasoningExpanded: this.reasoningExpanded(message),
       onToggleReasoning: (): void => { this.toggleReasoning(message); },
       onTool: (tool: ToolItem): void => { this.follow = false; this.selectedTool = tool; this.sheetKind = 'tool'; this.toolSheetOpen = true; },
-      onOpenLink: (url: string): void => { this.openLink(url); }, onCopy: (text: string): void => { this.copy(text); } })
+      onAttachment: (item: Attachment): void => { this.openAttachment(item); }, onOpenLink: (url: string): void => { this.openLink(url); }, onCopy: (text: string): void => { this.copy(text); } })
   }
   @Builder
   interactionCard(item: Interaction) {
@@ -278,19 +314,19 @@ struct Index {
       List({ space: 4, scroller: this.scroller }) {
         if (this.store.cursor) {
           ListItem() {
-            Button('加载更早消息', { type: ButtonType.Capsule }).fontSize(12).width('100%').backgroundColor(Color.Transparent).fontColor(C.muted)
+            Button('加载更早消息', { type: ButtonType.Capsule }).id('older-messages').fontSize(12).width('100%').backgroundColor(Color.Transparent).fontColor(C.muted)
               .enabled(!this.store.busy).onClick(() => { this.follow = false; this.store.older(); })
           }
         }
-        if (!this.store.messages.length && !this.store.interactions.length) {
+        if (!this.store.messages.length && !this.store.interactions.length && !this.store.busy) {
           ListItem() {
             Column({ space: 16 }) {
               SymbolGlyph($r('sys.symbol.lightbulb')).fontSize(44).fontColor([C.accent])
               Text('从一个想法开始').fontSize(24).fontWeight(FontWeight.Medium).fontColor(C.text)
               Text(this.store.directory ? '解释代码、修复问题，或一起完成一个任务。' : this.store.connected ? '选择一个项目，让 OpenCode 了解你的工作。' : '连接你的 OpenCode，随时继续开发。')
                 .fontSize(13).fontColor(C.muted).textAlign(TextAlign.Center)
-              Button(!this.store.connected ? '连接服务器' : !this.store.directory ? '选择项目' : '新建对话', { type: ButtonType.Capsule }).id('welcome-action')
-                .fontSize(13).fontColor(C.text).backgroundColor(C.field).borderRadius(20).height(40).enabled(!this.store.busy).onClick(() => { this.newChat(); })
+              if (!this.store.sessionID) { Button(!this.store.connected ? '连接服务器' : !this.store.directory ? '选择项目' : '新建对话', { type: ButtonType.Capsule }).id('welcome-action')
+                .fontSize(13).fontColor(C.text).backgroundColor(C.field).borderRadius(20).height(40).enabled(!this.store.busy).onClick(() => { this.newChat(); }) }
             }.width('100%').height(330).justifyContent(FlexAlign.Center)
           }
         }
@@ -299,7 +335,19 @@ struct Index {
       }.onTouch((event: TouchEvent) => { if (event.type === TouchType.Down) { this.follow = false; } }).id('conversation-list').padding({ left: 22, right: 22 }).layoutWeight(1).width('100%').constraintSize({ maxWidth: 860 }).scrollBar(BarState.Off)
         .onScrollFrameBegin((offset: number, state: ScrollState) => { if (state === ScrollState.Scroll && offset < 0) { this.follow = false; } return { offsetRemain: offset }; })
       Column({ space: 6 }) {
-        if (!this.follow || this.store.readingHistory || this.store.newerAvailable || this.store.interactions.length || (this.store.working && !!this.store.draft.trim())) {
+        if (this.pickingAttachments || this.store.working || this.store.pendingSend) {
+          Row({ space: 6 }) {
+            if (this.pickingAttachments || this.store.working) { LoadingProgress().width(14).height(14).color(C.accent) }
+            Text(this.pickingAttachments ? '正在读取附件…' : this.store.pendingSend ? '发送结果待核对，重试会沿用同一条消息' : this.store.interrupting ? '正在停止…' : '正在生成…').fontSize(11).fontColor(C.secondary).layoutWeight(1)
+            if (this.store.pendingSend) { Button('核对状态').id('verify-send').height(26).fontSize(11).buttonStyle(ButtonStyleMode.TEXTUAL).enabled(!this.store.busy).onClick(() => { this.store.sync(); }) }
+          }.width('100%').padding({ left: 4, right: 4 })
+        }
+        if (this.store.attachments.length) {
+          AttachmentStrip({ items: this.store.attachments, editable: true, locked: this.pickingAttachments || !!this.store.pendingSend || this.store.busy,
+            onOpen: (item: Attachment): void => { this.openAttachment(item); }, onRemove: (id: string): void => { this.store.removeAttachment(id); }, onRetry: (item: Attachment): void => { this.pickAttachments(false, item); } })
+          if (attachmentProblem(this.store.attachments, this.store.attachmentInput())) { Text(attachmentProblem(this.store.attachments, this.store.attachmentInput())).fontSize(11).fontColor(C.warning).width('100%') }
+        }
+        if (!this.follow || this.store.readingHistory || this.store.newerAvailable || this.store.interactions.length || (this.store.working && (!!this.store.draft.trim() || !!this.store.attachments.length))) {
           Row({ space: 8 }) {
             if (!this.follow || this.store.readingHistory || this.store.newerAvailable) {
               Button('回到最新').id('jump-latest').fontSize(11).height(28).backgroundColor(C.field).fontColor(C.secondary)
@@ -307,24 +355,28 @@ struct Index {
             }
             Blank()
             if (this.store.interactions.length) { Button('待处理 ' + this.store.interactions.length).id('pending-interactions').fontSize(11).height(28).backgroundColor(C.warning_bg).fontColor(C.warning).onClick(() => { this.follow = false; this.scroller.scrollEdge(Edge.Bottom); }) }
-            if (this.store.working && this.store.draft.trim()) { Button('停止生成').id('stop-secondary').fontSize(11).height(28).backgroundColor(Color.Transparent).fontColor(C.danger).enabled(!this.store.interrupting).onClick(() => { this.store.interrupt(); }) }
+            if (this.store.working && (this.store.draft.trim() || this.store.attachments.length)) { Button('停止生成').id('stop-secondary').fontSize(11).height(28).backgroundColor(Color.Transparent).fontColor(C.danger).enabled(!this.store.interrupting).onClick(() => { this.store.interrupt(); }) }
           }.width('100%').height(28)
         }
         Row({ space: 8 }) {
+          Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.plus')).fontSize(19).fontColor([C.secondary]) }
+            .id('attachment-add').accessibilityText('添加附件').width(32).height(36).padding(0).margin({ bottom: 3 }).backgroundColor(Color.Transparent)
+            .enabled(!!this.store.sessionID && !this.store.busy && !this.store.pendingSend && !this.pickingAttachments)
+            .bindMenu(this.attachmentMenu())
           TextArea({ placeholder: this.store.sessionID ? '发消息，或描述一个任务…' : '选择项目后开始对话', text: this.store.draft }).id('chat-input')
             .minLines(1).maxLines(5).constraintSize({ minHeight: 42, maxHeight: 148 }).maxLength(20000).layoutWeight(1).fontSize(15).lineHeight(22)
             .padding({ left: 0, right: 0, top: 10, bottom: 10 }).fontColor(C.text).placeholderColor(C.muted).caretColor(C.accent)
             .backgroundColor(Color.Transparent).borderRadius(0).enabled(!this.store.pendingSend && !!this.store.sessionID).onChange((value: string) => { this.store.draft = value; })
-          if (this.store.working && !this.store.draft.trim() && !this.store.pendingSend) {
+          if (this.store.working && !this.store.draft.trim() && !this.store.attachments.length && !this.store.pendingSend) {
             Button({ type: ButtonType.Circle }) { Text('■').fontSize(14).fontColor(C.on_accent) }
               .id('stop-button').accessibilityText('停止生成').width(36).height(36).padding(0).backgroundColor(C.accent).enabled(!this.store.interrupting).margin({ bottom: 3 })
               .onClick(() => { this.store.interrupt(); })
           } else {
             Button({ type: ButtonType.Circle }) {
               if (this.store.pendingSend) { Text('重试').fontSize(10).fontColor(C.on_accent) }
-              else { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(18).fontColor([this.store.draft.trim() ? C.on_accent : C.muted]) }
+              else { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(18).fontColor([this.store.draft.trim() || this.store.attachments.length ? C.on_accent : C.muted]) }
             }.id('send-button').accessibilityText(this.store.pendingSend ? '重试发送' : '发送消息').width(36).padding(0).height(36).margin({ bottom: 3 })
-              .backgroundColor(this.store.draft.trim() || this.store.pendingSend ? C.accent : C.field).enabled(!this.store.busy && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.pendingSend))
+              .backgroundColor(this.store.draft.trim() || this.store.attachments.length || this.store.pendingSend ? C.accent : C.field).enabled(!this.store.busy && !this.pickingAttachments && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.attachments.length || !!this.store.pendingSend))
               .onClick(() => { this.follow = true; this.store.send(); })
           }
         }.alignItems(VerticalAlign.Bottom).padding({ left: 14, right: 8, top: 4, bottom: 4 }).width('100%')
@@ -334,21 +386,7 @@ struct Index {
     }.alignItems(HorizontalAlign.Center).layoutWeight(1).width('100%')
   }
   @Builder
-  diffCard(diff: DiffItem) {
-    Column({ space: 8 }) {
-      Text(diff.path || '文件修改').fontSize(13).fontWeight(FontWeight.Bold).fontFamily('monospace').fontColor(C.text).width('100%')
-      ForEach(parseDiff(diff.patch, 1500), (line: DiffLine) => {
-        Row({ space: 6 }) {
-          Text(line.oldLine).width(26).fontSize(9).fontColor(C.muted).textAlign(TextAlign.End)
-          Text(line.newLine).width(26).fontSize(9).fontColor(C.muted).textAlign(TextAlign.End)
-          Text(line.text || ' ').fontFamily('monospace').fontSize(10).fontColor(line.kind === 'remove' ? C.removed_text : line.kind === 'add' ? C.added_text : C.secondary)
-            .layoutWeight(1).copyOption(CopyOptions.InApp)
-        }.alignItems(VerticalAlign.Top).width('100%').padding(3)
-          .backgroundColor(line.kind === 'add' ? C.added : line.kind === 'remove' ? C.removed : C.field)
-      }, (line: DiffLine) => line.id)
-      if (diff.patch.split('\n', 1501).length > 1500) { Text('仅显示前 1500 行，请在桌面查看完整修改。').fontSize(11).fontColor(C.secondary) }
-    }.padding(13).backgroundColor(C.surface).borderRadius(12).width('100%')
-  }
+  diffCard(diff: DiffItem) { DiffContent({ diff: diff, onCopy: (text: string): void => { this.copy(text); } }) }
   @Builder
   review() {
     Scroll() {
@@ -453,8 +491,17 @@ struct Index {
     }.padding({ left: 16, right: 16, bottom: 14 }).width(width).height('100%').backgroundColor(C.sidebar)
   }
   @Builder
+  attachmentMenu() {
+    Menu() {
+      MenuItem({ content: '选择照片' }).id('attachment-photos').enabled(this.store.attachmentInput().indexOf('image') >= 0).onClick(() => { this.pickAttachments(true); })
+      MenuItem({ content: '选择文件' }).id('attachment-files').onClick(() => { this.pickAttachments(false); })
+      MenuItem({ content: '最多 4 个，合计 1 MB；图片会压缩' }).enabled(false)
+    }
+  }
+  @Builder
   sheetContent() {
     if (this.sheetKind === 'tool') { this.toolDetails() }
+    else if (this.sheetKind === 'attachment') { AttachmentPreview({ item: this.selectedAttachment, saving: this.savingAttachment, onSave: (item: Attachment): void => { this.saveAttachment(item); }, onCopy: (text: string): void => { this.copy(text); } }) }
     else if (this.sheetKind === 'session') { this.sessionActions() }
     else {
       Column({ space: 8 }) {
@@ -635,6 +682,6 @@ struct Index {
       .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { this.sidebarOpen = show; })
       .width('100%').height('100%').backgroundColor(C.page).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .onAreaChange((oldArea: Area, newArea: Area) => { this.viewportWidth = Number(newArea.width); const wide = this.viewportWidth >= 840; if (this.wide !== wide) { this.wide = wide; this.sidebarOpen = wide; } })
-      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true })
+      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' || this.sheetKind === 'attachment' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true })
   }
 }

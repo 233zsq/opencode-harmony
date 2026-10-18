@@ -37,6 +37,7 @@ function load(file, key) {
   modules.set(key, exports);
   return exports;
 }
+load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
 const trust = load('entry/src/main/ets/data/DedicatedTrust.ets', './DedicatedTrust');
 const protocol = load('entry/src/main/ets/data/Protocol.ets', '../data/Protocol');
@@ -484,5 +485,35 @@ await test('authentication-blocked sync never makes follow-up automatic history 
 await test('a pending snapshot started before background suspension cannot overwrite foreground state',async()=>{
  const store=new AppStore();store.directory='/repo';const releases=[];store.api={request:async()=>({data:{}}),pending:()=>new Promise(r=>releases.push(r))};const read=store.refreshPending();
  await Promise.resolve();await Promise.resolve();store.setActive(false);store.pendingItems=[pendingItem('kept')];releases.forEach(r=>r([pendingItem('late')]));await read;assert.equal(store.pendingItems[0].id,'kept');assert.equal(store.pendingBusy,false);
+});
+
+await test('attachment-only prompts send exact inline bytes and clear only after acceptance',async()=>{
+ const store=new AppStore();store.sessionID='s';store.active=false;store.attachments=[{id:'a',name:'readme.txt',mime:'text/plain',data:'YQ==',size:1,uri:'file://phone.txt'}];let body;
+ store.api={request:async(p,m,b)=>{body=b;}};await store.send();assert.equal(body.text,'');assert.equal(body.files[0].uri,'data:text/plain;base64,YQ==');assert.equal(body.files[0].name,'readme.txt');assert.equal(store.attachments.length,0);
+});
+await test('an unknown attachment send retries the original immutable bytes with the same ID',async()=>{
+ const store=new AppStore();store.sessionID='s';store.active=false;store.attachments=[{id:'a',name:'a.txt',mime:'text/plain',data:'YQ==',size:1}];const attempts=[];
+ store.api={request:async(p,m,b)=>{attempts.push(b);if(attempts.length===1)throw new Error('lost');}};await store.send();store.attachments[0].data='Yg==';await store.send();assert.equal(attempts[0].id,attempts[1].id);assert.equal(attempts[1].files[0].uri,'data:text/plain;base64,YQ==');
+});
+await test('unsupported image models and failed attachment reads never submit a prompt',async()=>{
+ const store=new AppStore();store.sessionID='s';store.active=false;let writes=0;store.api={request:async()=>writes++};
+ store.attachments=[{id:'a',name:'a.jpg',mime:'image/jpeg',data:'YQ==',size:1}];await store.send();assert.equal(writes,0);assert.match(store.error,/图片/);
+ store.attachments=[{id:'a',name:'a.txt',mime:'text/plain',data:'',size:0,error:'read failure'}];await store.send();assert.equal(writes,0);assert.equal(store.attachments.length,1);
+});
+await test('history includes image and file metadata and explicit model input capabilities',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'u'},'');const m=api.parseMessages({data:[{id:'u',type:'user',text:'',files:[{name:'a.png',mime:'image/png',data:'YQ=='}]}]})[0];assert.equal(m.files[0].name,'a.png');assert.equal(m.files[0].data,'YQ==');
+ api.request=async()=>({data:[{providerID:'p',modelID:'m',name:'M',capabilities:{input:['text','image']}}]});assert.equal(JSON.stringify((await api.models('/r'))[0].input),'["text","image"]');
+});
+
+await test('oversized attachment history falls back to bounded single-message pages and preserves cursors',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'u'},'');const paths=[];
+ api.request=async path=>{paths.push(path);const u=new URL('https://example.com'+path);if(u.searchParams.get('limit')==='30')throw new Error('response too large');const i=Number(u.searchParams.get('cursor')||0);return{data:[{id:'m'+i,type:'user',text:'entry'}],cursor:{next:i<15?String(i+1):''}};};
+ const r=await api.messages('s');assert.equal(r.data.length,8);assert.equal(r.cursor.next,'8');assert.equal(paths.filter(p=>p.includes('limit=30')).length,1);await api.messages('s','8');assert.equal(paths.filter(p=>p.includes('limit=30')).length,1);
+});
+await test('authentication errors do not retry as compact history reads',async()=>{
+ const api=new protocol.Protocol({url:'https://example.com',username:'u'},'');let reads=0;api.request=async()=>{reads++;throw new protocol.ApiError(401,'authentication');};await assert.rejects(()=>api.messages('s'));assert.equal(reads,1);
+});
+await test('unknown send is confirmed by exact message lookup when it falls outside the current history page',async()=>{
+ const store=new AppStore();store.sessionID='s';store.pendingSend={id:'accepted',sessionID:'s',text:'task'};store.draft='task';store.error='socket closed。发送结果待核对，重试将使用同一消息 ID';store.api={messages:async()=>({data:[]}),parseMessages:()=>[],interactions:async()=>[],request:async path=>path.endsWith('/message/accepted')?{data:{id:'accepted',type:'user'}}:path.endsWith('/inbox')?{data:[]}:{data:{}}};await store.sync();assert.equal(store.pendingSend,undefined);assert.equal(store.draft,'');assert.equal(store.error,'');
 });
 console.log(count + ' adapter/state tests passed.');

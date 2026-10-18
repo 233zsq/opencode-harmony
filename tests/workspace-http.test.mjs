@@ -58,7 +58,7 @@ const modules=new Map([
 ]);
 function load(path,key){const exports={};const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true}}).outputText;
  vm.runInNewContext(code,{exports,require:name=>{assert.ok(modules.has(name),name);return modules.get(name);},Observed:value=>value,Error,Map,Set,Date,Math,JSON,setTimeout,clearTimeout,setInterval,clearInterval});modules.set(key,exports);return exports;}
-load('entry/src/main/ets/domain/Core.ts','../domain/Core');load('entry/src/main/ets/data/DedicatedTrust.ets','./DedicatedTrust');
+load('entry/src/main/ets/domain/Attachments.ts','../domain/Attachments');load('entry/src/main/ets/domain/Core.ts','../domain/Core');load('entry/src/main/ets/data/DedicatedTrust.ets','./DedicatedTrust');
 const {Protocol}=load('entry/src/main/ets/data/Protocol.ets','../data/Protocol');load('entry/src/main/ets/presentation/ProviderStore.ets','./ProviderStore');
 const {AppStore}=load('entry/src/main/ets/presentation/AppStore.ets','store');const api=new Protocol({url,username:'u',allowHttp:true},'test-only');
 const store=new AppStore();store.api=api;store.connected='loopback';store.directory='/repo';store.projects=await api.projects();

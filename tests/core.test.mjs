@@ -151,4 +151,35 @@ test('bold file names containing inline code do not display raw backticks',()=>{
  const tick=String.fromCharCode(96);const parts=core.inlineMarkdown('**'+tick+'README.md'+tick+'** — file');
  assert.equal(parts.map(p=>p.text).join(''),'README.md — file');assert.equal(parts[0].kind,'code');assert.equal(parts[0].strong,true);
 });
+
+test('Markdown preserves escaped table pipes and alignment',()=>{
+ const b=core.parseMarkdown('| Name | Value |\n| :--- | ---: |\n| a\\|b | `x|y` |')[0];
+ assert.deepEqual(b.rows,[['Name','Value'],['a|b','`x|y`']]);assert.deepEqual(b.align,['left','right']);
+});
+test('Markdown tracks nested lists and task checkbox state',()=>{
+ const b=core.parseMarkdown('- [x] done\n  - child\n1. next');assert.equal(b[0].checked,true);assert.equal(b[1].depth,1);assert.equal(b[2].marker,'1.');
+});
+test('Markdown handles tilde fences without closing on shorter runs',()=>{
+ const b=core.parseMarkdown('~~~~ts\nconst x = 1;\n~~~\n~~~~');assert.equal(b.length,1);assert.equal(b[0].kind,'code');assert.equal(b[0].text,'const x = 1;\n~~~');
+});
+test('Markdown renders setext headings and CRLF without raw markers',()=>{
+ const b=core.parseMarkdown('Title\r\n=====\r\n\r\nbody');assert.equal(b[0].kind,'heading');assert.equal(b[0].level,1);assert.equal(b[1].text,'body');
+});
+test('inline emphasis, strike, escaping and nested code preserve their text',()=>{
+ const tick=String.fromCharCode(96);const b=core.inlineMarkdown('**bold *nested* '+tick+'file'+tick+'** and ~~old~~ \\*literal\\*');
+ assert.equal(b.map(p=>p.text).join(''),'bold nested file and old *literal*');assert.ok(b.some(p=>p.text==='nested'&&p.emphasis&&p.strong));assert.ok(b.some(p=>p.text==='old'&&p.strike));
+});
+test('Markdown block and table bounds report truncation rather than create thousands of views',()=>{
+ const b=core.parseMarkdown('paragraph\n\n'.repeat(10000));assert.ok(b.length<=401);assert.ok(b.some(p=>p.kind==='notice'));
+ const table=core.parseMarkdown('| a | b |\n| --- | --- |\n'+('| x | y |\n'.repeat(1000)));assert.ok(table[0].rows.length<=101);assert.ok(table.some(p=>p.kind==='notice'));
+});
+
+test('attachment-only drafts survive switches and global byte limits refuse eviction',()=>{
+ const memory=new core.ConversationMemory(),f={id:'a',name:'a.txt',mime:'text/plain',data:'YQ==',size:1048576};
+ for(let i=0;i<16;i++)memory.save('s','/r','m'+i,'',undefined,[],[f]);assert.equal(memory.read('s','/r','m0').files[0].id,'a');assert.equal(memory.read('other','/r','m0').files,undefined);assert.throws(()=>memory.save('s','/r','m17','',undefined,[],[f]),/16 MB/);
+});
+test('history attachment budget releases older payloads while retaining names and newest image',()=>{
+ const base={role:'user',text:'',reasoning:'',parts:[],tools:[],state:'completed'},messages=Array.from({length:20},(_,i)=>({...base,id:'m'+i,files:[{id:'f'+i,name:'pic'+i,mime:'image/png',size:3,data:'YWFh'}]}));
+ const bounded=core.boundMessageAttachments(messages,9);assert.equal(bounded[0].files[0].data,'');assert.equal(bounded[0].files[0].name,'pic0');assert.equal(bounded.at(-1).files[0].data,'YWFh');assert.equal(bounded.filter(m=>m.files[0].data).length,3);assert.equal(core.boundMessageAttachments(bounded,9),bounded);
+});
 console.log(count + ' core tests passed.');

@@ -1,5 +1,5 @@
 import { HarmonyColors as C } from '../presentation/HarmonyColors';
-import { MarkdownBlock, parseMarkdown, InlinePart, inlineMarkdown } from '../domain/Core';
+import { MarkdownBlock, parseMarkdown, InlinePart, inlineMarkdown, previewText } from '../domain/Core';
 
 @Component
 export struct MarkdownText {
@@ -21,8 +21,12 @@ export struct MarkdownText {
               Button('复制代码').id('copy-code-' + block.id).buttonStyle(ButtonStyleMode.TEXTUAL).fontSize(11).fontColor(C.code_text).height(24).padding({ left: 8, right: 0 }).onClick(() => { this.onCopy(block.text); })
             }.width('100%')
             Scroll() {
-              Text(block.text || ' ').fontSize(12).lineHeight(20).fontFamily('monospace').fontColor(C.code_text).copyOption(CopyOptions.InApp)
-            }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).padding({ bottom: 6 }).width('100%')
+              Scroll() {
+                Text(previewText(block.text, 24000, 400).text || ' ').fontSize(12).lineHeight(20).fontFamily('monospace').fontColor(C.code_text).copyOption(CopyOptions.InApp)
+              }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto).padding({ bottom: 8 }).width('100%')
+            }.id('markdown-code-' + block.id).scrollable(ScrollDirection.Vertical).scrollBar(BarState.Auto).width('100%')
+              .height(Math.min(300, previewText(block.text, 24000, 400).text.split('\n').length * 20 + 8))
+            if (previewText(block.text, 24000, 400).truncated) { Text('代码较长，预览前 400 行或 24000 字符；可复制完整代码。').fontSize(10).fontColor(C.code_text).width('100%') }
           }.alignItems(HorizontalAlign.Start).padding(12).backgroundColor(C.code_bg).borderRadius(10).width('100%')
         } else if (block.kind === 'table') {
           Scroll() {
@@ -30,8 +34,15 @@ export struct MarkdownText {
               ForEach(block.rows || [], (row: string[], index: number) => {
                 Row({ space: 0 }) {
                   ForEach(row, (cell: string, column: number) => {
-                    Text(cell).fontSize(12).fontWeight(index === 0 ? FontWeight.Bold : FontWeight.Normal)
-                      .fontColor(C.text).width(150).padding(10).border({ width: 0.5, color: C.separator })
+                    Text() {
+                      ForEach(inlineMarkdown(cell), (part: InlinePart) => {
+                        Span(part.text).fontWeight(index === 0 || part.strong ? FontWeight.Bold : FontWeight.Normal)
+                          .fontFamily(part.kind === 'code' ? 'monospace' : 'sans-serif').fontStyle(part.emphasis ? FontStyle.Italic : FontStyle.Normal)
+                          .decoration({ type: part.strike ? TextDecorationType.LineThrough : TextDecorationType.None })
+                          .fontColor(part.kind === 'link' ? C.accent : C.text).onClick(() => { if (part.kind === 'link' && part.url) { this.onOpenLink(part.url); } })
+                      }, (part: InlinePart) => part.id + part.text)
+                    }.fontSize(12).fontColor(C.text).width(150).padding(10).border({ width: 0.5, color: C.separator })
+                      .textAlign(block.align?.[column] === 'right' ? TextAlign.End : block.align?.[column] === 'center' ? TextAlign.Center : TextAlign.Start).copyOption(CopyOptions.InApp)
                   }, (cell: string, column: number) => String(column))
                 }.backgroundColor(index === 0 ? C.field : C.surface)
               }, (row: string[], index: number) => String(index))
@@ -43,16 +54,17 @@ export struct MarkdownText {
           Text() {
             ForEach(inlineMarkdown(block.text), (part: InlinePart) => {
               Span(part.text).fontWeight(part.kind === 'bold' || part.strong || block.kind === 'heading' ? FontWeight.Bold : FontWeight.Normal)
-                .fontFamily(part.kind === 'code' ? 'monospace' : 'sans-serif')
+                .fontFamily(part.kind === 'code' ? 'monospace' : 'sans-serif').fontStyle(part.emphasis ? FontStyle.Italic : FontStyle.Normal)
+                .decoration({ type: part.strike ? TextDecorationType.LineThrough : TextDecorationType.None })
                 .fontColor(part.kind === 'link' ? C.accent : block.kind === 'quote' ? C.secondary : C.text)
                 .onClick(() => { if (part.kind === 'link' && part.url) { this.onOpenLink(part.url); } })
             }, (part: InlinePart) => part.id + part.text)
-          }.fontSize(block.kind === 'heading' ? 19 : 15)
+          }.fontSize(block.kind === 'heading' ? (block.level === 1 ? 22 : block.level === 2 ? 19 : 17) : block.kind === 'notice' ? 11 : 15)
             .fontWeight(block.kind === 'heading' ? FontWeight.Bold : FontWeight.Normal)
             .fontColor(block.kind === 'quote' ? C.secondary : C.text)
-            .lineHeight(24).width('100%').copyOption(CopyOptions.InApp)
+            .lineHeight(block.kind === 'heading' ? 29 : 24).width('100%').copyOption(CopyOptions.InApp).padding({ left: block.kind === 'list' ? (block.depth || 0) * 14 : block.kind === 'quote' ? 10 : 0 })
         }
-      }, (block: MarkdownBlock) => block.id + block.kind + block.text + (block.kind === 'table' ? JSON.stringify(block.rows) : ''))
+      }, (block: MarkdownBlock) => block.id + block.kind + block.text + (block.kind === 'table' ? JSON.stringify([block.rows, block.align]) : '') + (block.level || 0) + (block.depth || 0))
       if (this.content.length > 200000) { Text('预览显示前 20 万字符，可使用复制回复获取完整文本。').fontSize(11).fontColor(C.muted) }
     }.alignItems(HorizontalAlign.Start).width('100%').bindContextMenu(this.replyMenu(), ResponseType.LongPress)
   }

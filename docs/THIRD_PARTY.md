@@ -29,6 +29,7 @@
 - 官方v2.0.29提交：042d0832f5f3a73eaa039a58a7d565776f6d4290。
 - OpenAPI：packages/protocol/openapi.json。
 - 关键实现：packages/schema/src/form.ts、packages/core/src/form.ts、packages/core/src/session/inbox.ts、packages/server/src/handlers/event.ts。
+- 附件及模型能力：packages/schema/src/prompt-input.ts、packages/schema/src/model.ts、packages/core/src/session/prompt.ts、packages/core/src/session/runner/to-llm-message.ts；原生选择/压缩/保存适配在本项目编写，无额外运行时依赖。
 - 官方固定源码：https://github.com/anomalyco/opencode/tree/042d0832f5f3a73eaa039a58a7d565776f6d4290
 
 请求体、响应envelope、scope、幂等消息ID及SSE字段按该版本核验，不依据可能漂移的文档页面直接推断兼容。

@@ -1,3 +1,5 @@
+import { Attachment } from '../domain/Attachments';
+import { AttachmentStrip } from './AttachmentStrip';
 import { HarmonyColors as C } from '../presentation/HarmonyColors';
 import { ChatMessage, ToolItem, toolStatus, toolSummary } from '../domain/Core';
 import { MarkdownText } from './MarkdownText';
@@ -11,6 +13,7 @@ export struct ConversationMessage {
   onToggleReasoning: () => void = (): void => {};
   onTool: (tool: ToolItem) => void = (tool: ToolItem): void => {};
   onOpenLink: (url: string) => void = (url: string): void => {};
+  onAttachment: (item: Attachment) => void = (): void => {};
   private reasoningScroller: Scroller = new Scroller();
   @Builder
   copyMenu() { Menu() { MenuItem({ content: '复制消息' }).onClick(() => { this.onCopy(this.message.text); }) } }
@@ -32,12 +35,15 @@ export struct ConversationMessage {
   }
   build() {
     if (this.message.role === 'user') {
-      Row() {
+      Column({ space: 8 }) {
+        if (this.message.text) { Row() {
         Blank().layoutWeight(1)
         Text(this.message.text).id('message-user-' + this.message.id).fontSize(15).lineHeight(25).fontColor(C.text)
           .padding({ left: 18, right: 18, top: 12, bottom: 12 }).backgroundColor(C.bubble).borderRadius(20)
           .constraintSize({ maxWidth: '88%' }).copyOption(CopyOptions.InApp)
-      }.width('100%').margin({ top: 12, bottom: 12 }).bindContextMenu(this.copyMenu(), ResponseType.LongPress)
+        }.width('100%') }
+        if (this.message.files?.length) { AttachmentStrip({ items: this.message.files || [], onOpen: this.onAttachment }) }
+      }.width('100%').alignItems(HorizontalAlign.End).margin({ top: 12, bottom: 12 }).bindContextMenu(this.copyMenu(), ResponseType.LongPress)
     } else if (this.message.role !== 'assistant') {
       Text(this.message.text).fontSize(11).fontColor(C.muted).width('100%').textAlign(TextAlign.Center).padding(8)
     } else {

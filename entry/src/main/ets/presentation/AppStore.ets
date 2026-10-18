@@ -1,14 +1,15 @@
+import { Attachment, PromptFile, attachmentProblem, promptFiles, ATTACHMENT_LIMIT, attachmentBytes } from '../domain/Attachments';
 import { common } from '@kit.AbilityKit';
 import { http } from '@kit.NetworkKit';
 import { Storage } from '../data/Storage';
 import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
-  DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
+  DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, normalizeUrl, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
 
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
-interface PromptRequest { id: string; text: string; delivery: string; resume: boolean; }
+interface PromptRequest { id: string; text: string; delivery: string; resume: boolean; files?: PromptFile[]; }
 interface ModelRef { id: string; providerID: string; }
 interface ModelRequest { model: ModelRef; }
 interface AnswerRequest { answer: Record<string, FieldValue>; }
@@ -84,6 +85,25 @@ export class AppStore {
   working: boolean = false;
   interrupting: boolean = false;
   draft: string = '';
+  attachments: Attachment[] = [];
+  attachmentInput(): string[] { return this.models.find((m: ModelItem) => m.id === this.modelID)?.input || ['text']; }
+  addAttachments(items: Attachment[]): void {
+    if (this.pendingSend || this.busy) { return; }
+    const next = this.attachments.slice();
+    for (const item of items) {
+      if (next.length >= 4) { this.error = '一次最多添加 4 个附件'; break; }
+      if (attachmentBytes(next) + item.size > ATTACHMENT_LIMIT) { next.push({ id: item.id, name: item.name, mime: item.mime, size: 0, data: '', uri: item.uri, error: '附件合计不能超过 1 MB，请移除部分附件后重试' }); }
+      else { next.push(item); }
+    }
+    this.attachments = next;
+  }
+  removeAttachment(id: string): void { if (!this.pendingSend && !this.busy) { this.attachments = this.attachments.filter((a: Attachment) => a.id !== id); } }
+  replaceAttachment(item: Attachment): void {
+    if (this.pendingSend || this.busy) { return; }
+    const old = this.attachments; const rest = old.filter((a: Attachment) => a.id !== item.id);
+    if (attachmentBytes(rest) + item.size > ATTACHMENT_LIMIT) { item = { id: item.id, name: item.name, mime: item.mime, size: 0, data: '', uri: item.uri, error: '附件合计不能超过 1 MB' }; }
+    this.attachments = old.map((a: Attachment) => a.id === item.id ? item : a);
+  }
   manualPath: string = '';
   serverName: string = '';
   serverUrl: string = 'https://';
@@ -127,7 +147,7 @@ export class AppStore {
   }
   private stashConversation(): boolean {
     if (!this.connected || !this.sessionID) { return true; }
-    try { this.conversationMemory.save(this.connected, this.directory, this.sessionID, this.draft, this.pendingSend, this.questionDrafts()); return true; }
+    try { this.conversationMemory.save(this.connected, this.directory, this.sessionID, this.draft, this.pendingSend, this.questionDrafts(), this.attachments); return true; }
     catch (e) { this.fail(e as Error); return false; }
   }
   private questionDrafts(): QuestionDraft[] { return this.interactions.filter((p: Interaction) => p.kind === 'form').map((p: Interaction): QuestionDraft => ({ id: p.id, fields: p.fields })); }
@@ -306,7 +326,7 @@ export class AppStore {
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
     this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false; this.interrupting = false;
-    this.pendingSend = undefined; this.draft = ''; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false; return true;
+    this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false; return true;
   }
   async connect(config: ServerConfig): Promise<void> {
     if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true;
@@ -420,7 +440,7 @@ export class AppStore {
     this.sessionsEpoch++; this.sessionCursor = ''; this.sessionQuery = ''; this.sessionsBusy = false; this.sessionsError = ''; this.showArchived = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
     this.providers.attach(api, directory.trim(), async (): Promise<void> => { await this.refreshModels(); });
-    this.pendingSend = undefined; this.draft = ''; this.directory = directory.trim(); this.sessionID = ''; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
+    this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.directory = directory.trim(); this.sessionID = ''; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
     this.fileContent = ''; this.filePath = ''; this.files = []; this.fileTruncated = false; this.cursor = ''; this.tailLoaded = false; this.readingHistory = false; this.newerAvailable = false; this.transcriptEpoch++; this.error = ''; this.busy = true; this.syncing = false;
     try {
       await api.request('/api/location?' + api.scope(this.directory));
@@ -460,7 +480,7 @@ export class AppStore {
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model;
     this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
     const saved = this.conversationMemory.read(this.connected, this.directory, session.id);
-    this.draft = saved.text; this.pendingSend = saved.pending; this.working = false; this.interrupting = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); this.queueWorkspace();
+    this.draft = saved.text; this.attachments = saved.files || []; this.pendingSend = saved.pending; this.working = false; this.interrupting = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); this.queueWorkspace();
     const generation = this.generation; this.busy = true; await this.sync(); if (generation === this.generation) { this.busy = false; }
   }
   async sync(): Promise<void> {
@@ -477,7 +497,7 @@ export class AppStore {
         if (current && m.state !== 'completed' &&
           (epoch !== this.eventEpoch || current.text.length > m.text.length || current.reasoning.length > m.reasoning.length)) {
           return { id: m.id, role: m.role, text: current.text, reasoning: current.reasoning,
-            parts: current.parts, tools: m.tools, state: current.state };
+            parts: current.parts, tools: m.tools, state: current.state, files: m.files };
         }
         return m;
       });
@@ -485,8 +505,17 @@ export class AppStore {
         if (safe.some((m: ChatMessage) => !this.messages.some((old: ChatMessage) => old.id === m.id))) { this.newerAvailable = true; }
         this.messages = mergeMessages(this.messages, safe.filter((m: ChatMessage) => this.messages.some((old: ChatMessage) => old.id === m.id)));
       } else { const merged = mergeMessages(this.messages, safe); this.messages = merged.length > 300 ? merged.slice(-300) : merged; }
+      this.messages = boundMessageAttachments(this.messages);
       if (!this.tailLoaded) { this.cursor = string(object(object(response)['cursor'])['next']); this.tailLoaded = true; }
-      if (this.pendingSend && incoming.some((m: ChatMessage) => m.id === this.pendingSend?.id)) { this.pendingSend = undefined; this.draft = ''; this.clearSavedDraft(); }
+      if (this.pendingSend) {
+        const pending = this.pendingSend; let confirmed = incoming.some((m: ChatMessage) => m.id === pending.id);
+        if (!confirmed) {
+          try { const message = object(object(await api.request('/api/session/' + encodeURIComponent(id) + '/message/' + encodeURIComponent(pending.id)))['data']); confirmed = message['id'] === pending.id && message['type'] === 'user'; }
+          catch (e) { if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { throw e; } }
+        }
+        if (generation !== this.generation) { return; }
+        if (confirmed && this.pendingSend?.id === pending.id) { this.pendingSend = undefined; this.draft = ''; this.attachments = []; if (this.error.indexOf('发送结果待核对') >= 0) { this.error = ''; } this.clearSavedDraft(); }
+      }
       await this.syncInteractions(api, id, 'form', generation);
       await this.syncInteractions(api, id, 'permission', generation);
       const active = object(object(await api.request('/api/session/active'))['data']);
@@ -554,7 +583,7 @@ export class AppStore {
     try {
       const result = await this.api.messages(this.sessionID, this.cursor);
       if (generation !== this.generation || transcript !== this.transcriptEpoch) { return; }
-      this.messages = mergeMessages(this.messages, this.api.parseMessages(result), true).slice(0, 300);
+      this.messages = boundMessageAttachments(mergeMessages(this.messages, this.api.parseMessages(result), true).slice(0, 300));
       this.cursor = string(object(object(result)['cursor'])['next']);
     } catch (e) { this.fail(e as Error); } finally { if (generation === this.generation) { this.busy = false; } }
   }
@@ -563,23 +592,37 @@ export class AppStore {
     this.messages = []; this.cursor = ''; this.tailLoaded = false; this.syncAgain = true;
     await this.sync();
   }
+  async attachmentPreview(item: Attachment): Promise<Attachment> {
+    if (item.data || !this.api) { return item; }
+    const message = this.messages.find((m: ChatMessage) => m.files?.some((f: Attachment) => f.id === item.id));
+    if (!message) { return item; }
+    const generation = this.generation;
+    try {
+      const result = await this.api.request(this.sessionPath() + '/message/' + encodeURIComponent(message.id));
+      if (generation !== this.generation) { return item; }
+      const envelope: Json = {}; const entries: Object[] = [object(result)['data']]; envelope['data'] = entries;
+      return this.api.parseMessages(envelope)[0]?.files?.find((f: Attachment) => f.id === item.id) || item;
+    } catch (_) { return { id: item.id, name: item.name, mime: item.mime, size: item.size, data: '', error: '读取失败，请关闭后重试' }; }
+  }
   async send(): Promise<void> {
-    if (!this.api || !this.sessionID || this.busy || (!this.draft.trim() && !this.pendingSend)) { return; }
+    if (!this.api || !this.sessionID || this.busy || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
     const pending: PendingPrompt = this.pendingSend || {
       id: 'msg_' + Date.now().toString(36) + Math.random().toString(36).slice(2),
-      sessionID: this.sessionID, text: this.draft.trim()
+      sessionID: this.sessionID, text: this.draft.trim(), files: this.attachments.map((a: Attachment): Attachment => ({ id: a.id, name: a.name, mime: a.mime, data: a.data, size: a.size }))
     };
+    const problem = attachmentProblem(pending.files || [], this.attachmentInput());
+    if (problem) { this.error = problem; return; }
     this.pendingSend = pending; const generation = this.generation; this.busy = true; this.error = '';
     try {
       await this.api.request(this.sessionPath() + '/prompt', http.RequestMethod.POST,
-        { id: pending.id, text: pending.text, delivery: 'steer', resume: true } as PromptRequest);
+        { id: pending.id, text: pending.text, delivery: 'steer', resume: true, files: pending.files?.length ? promptFiles(pending.files) : undefined } as PromptRequest);
       if (generation !== this.generation) { return; }
-      this.pendingSend = undefined; this.draft = ''; this.clearSavedDraft(); this.working = true; if (this.readingHistory) { await this.latest(); } else { await this.sync(); }
+      this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.clearSavedDraft(); this.working = true; if (this.readingHistory) { await this.latest(); } else { await this.sync(); }
     } catch (e) {
       if (generation === this.generation) {
         this.fail(e as Error);
         if (e instanceof ApiError && [400, 401, 403, 404, 405, 413, 422, 495].indexOf(e.code) >= 0) {
-          this.pendingSend = undefined; this.draft = pending.text; this.stashConversation();
+          this.pendingSend = undefined; this.draft = pending.text; this.attachments = pending.files || []; this.stashConversation();
         } else { this.error += '。发送结果待核对，重试将使用同一消息 ID'; }
       }
     } finally { if (generation === this.generation) { this.busy = false; } }

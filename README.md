@@ -10,6 +10,7 @@
 - API26 原生沉浸光感、系统分段控件及跟随系统/浅色/深色外观；最低兼容 API24。
 - 多服务器配置、HTTP Basic 认证、连接与错误状态。
 - 项目/目录、创建和恢复会话、历史分页；会话改名、本机置顶/归档及服务器名称搜索。
+- 原生照片/文件选择、附件草稿与压缩、图片/文本预览及保存；按模型能力检查图片和 PDF 输入。
 - SSE 流式正文，思考结束自动收起、工具摘要点击查看详情；原生 Markdown、代码块、表格和可点击 HTTPS 链接。
 - V2 Question/Form：单选、多选、文本、条件字段、默认值与类型校验。
 - 审批前查看命令、目录、操作范围及请求自带 Diff；批准前重新核对，支持单次批准/拒绝及失败恢复。
@@ -19,7 +20,7 @@
 - 退避重连、回前台同步、消息 ID 去重与迟到响应隔离；发送结果核对、草稿及 Question 答案在本次运行中暂存。
 - 跨项目待办中心、侧栏运行/待回答/待审批状态；消息/代码复制及原生多行输入。
 
-已在 API26 模拟器和 API24 Pad 构建、安装并运行，Pad 使用本机 DevEco 调试签名及 Wi-Fi 调试。真实 MiMo 对话、Question、拒绝与批准文件修改、只读 Diff 和应用重开恢复均有设备验证；新增功能的完整交互仍待统一验收，本轮聊天排版与多行输入已在 API26 模拟器复验；本机已有125项客户端、协议、存储与HTTP回归、2项域名迁移生成器回归及4项合成负载检查通过，11项Linux设置服务保留先前测试记录。本轮完善见 [REFINEMENTS.md](docs/REFINEMENTS.md)，详细证据与限制见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前附件与内容更新已完成 153 项本机回归、4 项合成负载检查及完整构建，最新交互按使用者要求只在 API26 模拟器验收；真机留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。具体交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
 独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
@@ -49,6 +50,7 @@
 
     node tests/core.test.mjs
     node tests/state.test.mjs
+    node tests/attachments.test.mjs
     node tests/permission-metadata.test.mjs
     node tests/appearance.test.mjs
     node tests/local-state.test.mjs

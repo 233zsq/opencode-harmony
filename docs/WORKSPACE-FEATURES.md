@@ -49,4 +49,4 @@
 4. MiMo 任务运行时锁屏、切后台、切网络后恢复；未知回执不重复生成消息，停止操作有明确反馈。
 5. 使用真实长会话和大 Diff 测量滚动、内存和恢复耗时；API26 真机检查材质及性能。
 
-图片附件、完整 CommonMark、第三方真实 Key/OAuth、正式域名迁移等原有后续事项仍按 PROGRESS.md 的边界记录；本轮不把这些项目计为已验收。
+以上为本文件初次开发时的记录。后续附件与消息显示、API26 模拟器统一验收及当前边界见 [CONTENT-AND-ACCEPTANCE.md](CONTENT-AND-ACCEPTANCE.md)。完整 CommonMark、第三方真实 Key/OAuth、正式域名迁移和最新真机验收仍有后续工作。

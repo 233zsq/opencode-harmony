@@ -1,3 +1,4 @@
+import { Attachment, historyAttachment } from '../domain/Attachments';
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -36,6 +37,8 @@ export function parseFields(value: Object | undefined): FormField[] {
   return fields;
 }
 
+interface HistoryCursor { next: string; }
+interface HistoryPage { data: Object[]; cursor: HistoryCursor; }
 interface RenameSessionRequest { title: string; }
 interface ApprovalPatchInput { file: string; patch: string; }
 
@@ -80,6 +83,7 @@ export function networkError(error: Error): Error {
   return error;
 }
 export class Protocol {
+  private compactHistory: Set<string> = new Set<string>();
   private auth: string;
   config: ServerConfig;
   constructor(config: ServerConfig, password: string) {
@@ -164,12 +168,29 @@ export class Protocol {
   async models(directory: string): Promise<ModelItem[]> {
     return rows(await this.request('/api/model?' + this.scope(directory))).map((v: Object): ModelItem => {
       const m = object(v);
-      return { id: string(m['providerID']) + '/' + string(m['modelID']), label: string(m['name'], string(m['modelID'])) };
+      return { id: string(m['providerID']) + '/' + string(m['modelID']), label: string(m['name'], string(m['modelID'])), input: list(object(m['capabilities'])['input']).map((v: Object) => string(v)) };
     }).filter((m: ModelItem) => !m.id.endsWith('/'));
   }
   async messages(id: string, cursor: string = ''): Promise<Object> {
-    return this.request('/api/session/' + encodeURIComponent(id) + '/message?limit=30&' +
-      (cursor ? 'cursor=' + encodeURIComponent(cursor) : 'order=desc'));
+    if (this.compactHistory.has(id)) { return this.smallMessages(id, cursor); }
+    try {
+      return await this.request('/api/session/' + encodeURIComponent(id) + '/message?limit=30&' + (cursor ? 'cursor=' + encodeURIComponent(cursor) : 'order=desc'));
+    } catch (e) {
+      if (e instanceof ApiError) { throw e; }
+      // A large attachment page may exceed the 2 MB response bound. GET-only fallback also tolerates transient reads.
+      const page = await this.smallMessages(id, cursor); this.compactHistory.add(id); return page;
+    }
+  }
+  private async smallMessages(id: string, cursor: string): Promise<Object> {
+    let data: Object[] = []; let next = cursor; let characters = 0;
+    for (let page = 0; page < 8; page++) {
+      const response = await this.request('/api/session/' + encodeURIComponent(id) + '/message?limit=1&' + (next ? 'cursor=' + encodeURIComponent(next) : 'order=desc'));
+      const chunk = rows(response); data = data.concat(chunk); characters += JSON.stringify(chunk).length;
+      const after = string(object(object(response)['cursor'])['next']);
+      if (!after || after === next || !chunk.length) { next = ''; break; }
+      next = after; if (characters >= 2097152 && page >= 1) { break; }
+    }
+    const result: HistoryPage = { data: data, cursor: { next: next } }; return result;
   }
   parseMessages(response: Object): ChatMessage[] {
     return rows(response).slice().reverse().map((v: Object): ChatMessage => {
@@ -189,6 +210,7 @@ export class Protocol {
         parts.filter((p: TextPart) => p.type === 'text').map((p: TextPart) => p.text).join('\n') || (role === 'assistant' ? (failure['message'] ? '模型调用失败：' + string(failure['message']).slice(0, 500) : '') : role === 'model-switched' ? '会话模型已切换' : role === 'agent-switched' ? 'Agent 已切换' : role === 'location-switched' ? '工作目录已切换' : '会话状态已更新');
       return { id: string(m['id']), role: role, text: text,
         reasoning: parts.filter((p: TextPart) => p.type === 'reasoning').map((p: TextPart) => p.text).join('\n'),
+        files: list(m['files']).slice(0, 4).map((v: Object, index: number): Attachment => { const file = object(v); return historyAttachment(string(m['id']) + '-file-' + index, string(file['name']), string(file['mime']), string(file['data'])); }),
         parts: parts, tools: tools, state: m['finish'] === 'error' ? 'failed' : object(m['time'])['completed'] ? 'completed' : 'streaming' };
     }).filter((m: ChatMessage) => m.id.length > 0 && m.role !== 'idle');
   }
