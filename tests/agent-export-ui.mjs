@@ -1,0 +1,26 @@
+// Uses only the explicitly selected local fixture; no model or remote server writes.
+import assert from 'node:assert/strict';
+import {tap,find,wait,input,back,pause,layout,shot} from './native-driver.mjs';
+const base='http://127.0.0.1:4210';const control=(name,enabled)=>fetch(base+'/__test/'+name+(enabled===undefined?'':'?enabled='+Number(enabled)),{method:'POST'});const state=async()=>await(await fetch(base+'/__test/state')).json();
+const posts=async()=>(await state()).receipts.filter(r=>r.path.endsWith('/agent')&&r.method==='POST');
+assert.equal(find('model-select')?.text,'本机测试模型','Select the local fixture session first.');
+const initial=(await posts()).length;
+await tap('agent-select');await wait('agent-picker');await wait('agent-option-fixture-plan');assert.ok(!find('agent-option-fixture-hidden'));assert.ok(!find('agent-option-fixture-subagent'));
+await input('agent-search','fixture-plan');if(find('SkinBgContent'))await back();await shot('agent-search');await tap('agent-option-fixture-plan');await wait('模型切换测试');assert.equal(find('agent-select').text,'规划 Agent');assert.equal((await posts()).length,initial+1);assert.deepEqual((await posts()).at(-1).input,{agent:'fixture-plan'});
+await tap('agent-select');await wait('agent-option-fixture-build');await control('agent-failure',true);await tap('agent-option-fixture-build');await wait('agent-error');assert.ok(find('agent-picker'));await shot('agent-rejected');await control('agent-failure',false);await control('agent-lost',true);await tap('agent-option-fixture-build');await wait('agent-error');assert.match(find('agent-error').text,/待确认/);const before=(await posts()).length;await control('agent-lost',false);await tap('agent-refresh');await pause(900);assert.equal((await posts()).length,before);assert.ok(!find('agent-error'));assert.equal((await state()).agent,'fixture-build');
+await control('agent-running',true);await pause(2200);await wait('agent-blocked');assert.equal(find('agent-option-fixture-plan').enabled,'false');await shot('agent-running-blocked');await control('agent-running',false);await back();await wait('本机测试模型');
+console.log('PASS native Agent names, scope, search, hidden/subagent filtering, exact switch and model readback, rejection, lost acknowledgement without repost and running-task block.');
+await control('export-history');await pause(2500);await tap('open-menu');await tap('open-export');await wait('export-panel');await tap('export-text');await control('export-failure',true);await tap('export-start');await wait('export-error');assert.match(find('export-error').text,/503/);await shot('export-read-failed');await control('export-failure',false);await control('export-delay',true);await tap('export-start');await wait('export-cancel');await tap('export-cancel');await wait('export-error');assert.match(find('export-error').text,/取消/);await control('export-delay',false);await pause(1800);assert.ok(find('export-panel'));assert.ok(!find('dialog_confirm'));
+console.log('PASS native failed export and cancellation retain the panel without opening the system save picker.');
+const filename=(await state()).title+'.txt';
+await tap('export-start');await wait('dialog_confirm');await wait(filename);await shot('export-save-picker');await tap('dialog_confirm');await wait('export-notice');assert.match(find('export-notice').text,/360/);await shot('export-saved');await back();
+async function importAndCheck(name,tools){
+ await tap('attachment-add');await tap('attachment-files');await tap('浏览');await tap('我的手机');await tap('Download');await tap(name);await pause(800);
+ const attachment=layout().find(n=>n.visible!=='false'&&n.id?.startsWith('attachment-open-'));assert.ok(attachment,'Saved attachment was not imported');await tap(attachment);await wait('attachment-preview-text');const text=find('attachment-preview-text').text;
+ assert.match(text,/EXPORT_ENTRY_000/);assert.match(text,/EXPORT_ENTRY_359/);assert.equal((text.match(/EXPORT_ENTRY_/g)||[]).length,360);assert.match(text,/metadata-only.txt/);assert.equal(text.includes('EXPORT_TOOL_OUTPUT'),tools);
+ for(const secret of ['EXPORT_REASONING','EXPORT_INLINE_PRIVATE',Buffer.from('EXPORT_INLINE_PRIVATE').toString('base64')])assert.equal(text.includes(secret),false);
+ await shot(tools?'export-markdown-tools-verified':'export-file-verified');await back();const remove=layout().find(n=>n.visible!=='false'&&n.id?.startsWith('attachment-remove-'));assert.ok(remove);await tap(remove);
+}
+await importAndCheck(filename,false);console.log('PASS native saved TXT re-import contains all 360 entries and metadata, excludes tool output, reasoning and attachment bytes; test draft removed.');
+await tap('open-menu');await tap('open-export');await wait('export-panel');await tap('export-start');await wait('dialog_confirm');await back();await wait('export-notice');assert.match(find('export-notice').text,/取消保存/);await shot('export-save-cancelled');
+await tap('export-tools');await tap('export-start');await wait('dialog_confirm');const markdown=(await state()).title+'.md';await wait(markdown);await tap('dialog_confirm');await wait('export-notice');assert.match(find('export-notice').text,/360/);await back();await importAndCheck(markdown,true);console.log('PASS native save-picker cancellation and Markdown with opt-in tool details, verified by re-import; no model requests.');

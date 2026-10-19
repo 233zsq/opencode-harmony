@@ -18,11 +18,14 @@ const integrations = [
 ];
 let permissionReadFailure = false;
 let modelFailure = false;
+let agentFailure=false,agentLost=false,exportFailure=false,exportDelay=false;
+const historyReads=[];
+const agents=[{id:'fixture-build',name:'实施 Agent',description:'实施代码变更',mode:'primary',hidden:false,model:{providerID:'fixture',id:'fixture-coder'}},{id:'fixture-plan',name:'规划 Agent',description:'分析与规划任务',mode:'primary',hidden:false,model:{providerID:'fixture',id:'fixture-second'}},{id:'fixture-hidden',name:'隐藏 Agent',mode:'primary',hidden:true},{id:'fixture-subagent',name:'内部 Agent',mode:'subagent',hidden:false}];
 let uiMessageID = '';
 let active = false;
 let sequence = 0;
 let model = { id: 'fixture-coder', providerID: 'fixture' };
-const session = { id: 'ses_fixture', title: '本机联调 · 八项流程', location: { directory }, model,
+const session = { id: 'ses_fixture', title: '本机联调 · 八项流程', agent:'fixture-build', location: { directory }, model,
   projectID: 'prj_fixture', time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: {} };
 const send = (res, value, status = 200) => {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -105,7 +108,17 @@ const server = http.createServer(async (req, res) => {
     return send(res,{ready:true});
   }
   if (path === '/__test/model-failure' && req.method === 'POST') { modelFailure = url.searchParams.get('enabled') === '1';return send(res,{modelFailure}); }
-  if (path === '/__test/state') return send(res, { receipts, messages: messages.length, forms, permissions, streams: streams.size });
+  if (path === '/__test/agent-failure' && req.method === 'POST') { agentFailure=url.searchParams.get('enabled')==='1'; return send(res,{agentFailure}); }
+  if (path === '/__test/agent-lost' && req.method === 'POST') { agentLost=url.searchParams.get('enabled')==='1'; return send(res,{agentLost}); }
+  if (path === '/__test/agent-running' && req.method === 'POST') { active=url.searchParams.get('enabled')==='1';session.outcome=active?undefined:'succeeded';event('session.idle',{sessionID:session.id});return send(res,{active}); }
+  if (path === '/__test/export-failure' && req.method === 'POST') { exportFailure=url.searchParams.get('enabled')==='1';return send(res,{exportFailure}); }
+  if (path === '/__test/export-delay' && req.method === 'POST') { exportDelay=url.searchParams.get('enabled')==='1';return send(res,{exportDelay}); }
+  if (path === '/__test/export-history' && req.method === 'POST') {
+    active=false;forms.splice(0);permissions.splice(0);session.outcome='succeeded';session.title='Export acceptance '+Date.now();messages.splice(0);
+    for(let i=0;i<360;i++)messages.push(i%2===0?{id:'export_'+i,type:'user',text:'EXPORT_ENTRY_'+String(i).padStart(3,'0'),files:i===0?[{name:'metadata-only.txt',mime:'text/plain',data:Buffer.from('EXPORT_INLINE_PRIVATE').toString('base64')}]:[],time:{created:i+1}}:{id:'export_'+i,type:'assistant',content:[{type:'reasoning',text:'EXPORT_REASONING'},{type:'text',text:'EXPORT_ENTRY_'+String(i).padStart(3,'0')},...(i===359?[{type:'tool',id:'fixture-export-tool',name:'read',state:{status:'completed',input:{path:'test.txt'},content:[{type:'text',text:'EXPORT_TOOL_OUTPUT'}]}}]:[])],time:{created:i+1,completed:i+2}});
+    event('session.idle',{sessionID:session.id});return send(res,{ready:true});
+  }
+  if (path === '/__test/state') return send(res, { receipts, historyReads,title:session.title,agent:session.agent,model:session.model,messages: messages.length, forms, permissions, streams: streams.size });
   if (path === '/__test/disconnect') {
     for (const stream of streams) stream.end();
     return send(res, { disconnected: true });
@@ -128,12 +141,24 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/permission/request') return permissionReadFailure ? send(res, { error: 'Controlled approval read failure' }, 400) : send(res, { location: { directory }, data: permissions });
   if (path === '/api/session/' + session.id && req.method === 'PATCH') { session.title = input.title; return send(res, {}, 204); }
   if (path === '/api/session/active') return send(res, { data: active ? { [session.id]: { type: 'running' } } : {} });
+  if (path === '/api/agent') return send(res,{location:{directory},data:agents});
   if (path === '/api/model') return send(res, { location: { directory }, data: [
     { id: 'fixture/fixture-coder', modelID: 'fixture-coder', providerID: 'fixture', name: '本机测试模型', enabled: true, status: 'active' },
     { id: 'fixture/fixture-second', modelID: 'fixture-second', providerID: 'fixture', name: '模型切换测试', enabled: true, status: 'active' },
     ...Array.from({length:75},(_,i)=>({modelID:'model-'+String(i).padStart(3,'0'),providerID:'fixture-extra',name:'测试模型'+String(i).padStart(3,'0'),enabled:true,capabilities:{input:i%2===0?['text','image']:['text','pdf']}}))
   ] });
-  if (path.endsWith('/message')) return send(res, { data: [...messages].reverse().slice(0, 30), cursor: {} });
+  if (path.endsWith('/message')) {
+    const limit=Math.min(100,Number(url.searchParams.get('limit')||30));const token=url.searchParams.get('cursor');const [direction,position]=token?token.split(':'):[url.searchParams.get('order')||'desc','0'];const start=Number(position);historyReads.push({direction,start,limit});
+    if(direction==='asc'&&exportFailure)return send(res,{error:'Controlled export failure'},503);
+    if(direction==='asc'&&exportDelay)await new Promise(r=>setTimeout(r,1500));
+    const rows=direction==='asc'?[...messages]:[...messages].reverse();return send(res,{data:rows.slice(start,start+limit),cursor:{next:start+limit<rows.length?direction+':'+(start+limit):''}});
+  }
+  if (path.endsWith('/agent') && req.method==='POST') {
+    if(agentFailure)return send(res,{error:'Controlled Agent rejection'},400);
+    const selected=agents.find(a=>a.id===input.agent&&!a.hidden&&a.mode==='primary');if(!selected)return send(res,{error:'Invalid Agent'},400);
+    session.agent=selected.id;session.model=selected.model;
+    return agentLost?send(res,{error:'Controlled acknowledgement loss'},503):send(res,{},204);
+  }
   if (path.endsWith('/inbox')) return send(res, { data: [] });
   if (path.endsWith('/prompt')) {
     if (!prompts.has(input.id)) {

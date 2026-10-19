@@ -67,7 +67,7 @@ export interface Interaction {
 }
 export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; useDedicatedTrust?: boolean; preferredModel?: string; }
 export interface ProjectItem { id: string; name: string; directory: string; }
-export interface SessionItem { id: string; title: string; directory: string; status: string; model: string; updated?: number; archived?: boolean; }
+export interface SessionItem { agent?: string; id: string; title: string; directory: string; status: string; model: string; updated?: number; archived?: boolean; }
 export interface ModelItem { id: string; label: string; input?: string[]; }
 export interface FileItem { name: string; path: string; directory: boolean; }
 export interface DiffItem { path: string; patch: string; }

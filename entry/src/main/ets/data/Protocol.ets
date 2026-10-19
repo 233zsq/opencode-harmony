@@ -1,3 +1,5 @@
+import { AgentItem, selectableAgents } from '../domain/Agents';
+import { ExportPage } from '../domain/TranscriptExport';
 import { Attachment, historyAttachment } from '../domain/Attachments';
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
@@ -139,7 +141,7 @@ export class Protocol {
     const s = object(value); const location = object(s['location']); const model = object(s['model']);
     return { id: string(s['id']), title: string(s['title'], '未命名会话'), directory: string(location['directory'], directory),
       status: 'idle', model: model['id'] ? string(model['providerID']) + '/' + string(model['id']) : '',
-      updated: Number(object(s['time'])['updated']) || 0, archived: !!object(s['time'])['archived'] };
+      agent: string(s['agent']), updated: Number(object(s['time'])['updated']) || 0, archived: !!object(s['time'])['archived'] };
   }
   async session(id: string): Promise<SessionItem> {
     const session = this.parseSession(object(await this.request('/api/session/' + encodeURIComponent(id)))['data']);
@@ -170,6 +172,37 @@ export class Protocol {
       const m = object(v);
       return { id: string(m['providerID']) + '/' + string(m['modelID']), label: string(m['name'], string(m['modelID'])), input: list(object(m['capabilities'])['input']).map((v: Object) => string(v)) };
     }).filter((m: ModelItem) => !m.id.endsWith('/'));
+  }
+  async agents(directory: string): Promise<AgentItem[]> {
+    return selectableAgents(rows(await this.request('/api/agent?' + this.scope(directory))).map((value: Object): AgentItem => {
+      const a = object(value); const model = object(a['model']);
+      return { id: string(a['id']), name: string(a['name'], string(a['id'])).slice(0, 200), description: string(a['description']).slice(0, 2000),
+        mode: string(a['mode']), hidden: a['hidden'] === true, model: model['id'] ? string(model['providerID']) + '/' + string(model['id']) : '' };
+    }));
+  }
+  async exportBoundary(id: string): Promise<string> {
+    const response = await this.request('/api/session/' + encodeURIComponent(id) + '/message?limit=1&order=desc');
+    const data = rows(response); const boundary = string(object(data[0])['id']);
+    if (data.length && !boundary) { throw new Error('历史消息缺少标识，导出未完成'); } return boundary;
+  }
+  async exportPage(id: string, cursor: string): Promise<ExportPage> {
+    const base = '/api/session/' + encodeURIComponent(id) + '/message?';
+    const query = cursor ? 'cursor=' + encodeURIComponent(cursor) : 'order=asc';
+    let response: Object;
+    try { response = await this.request(base + 'limit=30&' + query); }
+    catch (e) { if (e instanceof ApiError) { throw e; } response = await this.request(base + 'limit=1&' + query); }
+    const raw = rows(response); const ids = raw.map((value: Object): string => string(object(value)['id']));
+    if (ids.some((id: string) => !id)) { throw new Error('历史消息缺少标识，导出未完成'); }
+    const messages = this.parseMessages(response).reverse().map((message: ChatMessage): ChatMessage => {
+      const source = object(raw.find((value: Object) => string(object(value)['id']) === message.id));
+      const files = list(source['files']).map((value: Object, index: number): Attachment => {
+        const file = object(value); const data = string(file['data']);
+        return { id: message.id + '-file-' + index, name: string(file['name']).replace(/[\x00-\x1f]/g, '').slice(0, 160) || '附件', mime: string(file['mime']).slice(0, 160), data: '',
+          size: Math.max(0, Math.floor(data.length * 3 / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)) };
+      });
+      return { id: message.id, role: message.role, text: message.text, reasoning: '', parts: [], tools: message.tools, state: message.state, files: files };
+    });
+    return { messages: messages, ids: ids, cursor: string(object(object(response)['cursor'])['next']) };
   }
   async messages(id: string, cursor: string = ''): Promise<Object> {
     if (this.compactHistory.has(id)) { return this.smallMessages(id, cursor); }

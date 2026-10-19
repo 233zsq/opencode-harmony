@@ -1,3 +1,7 @@
+import { AgentItem } from '../domain/Agents';
+import { AgentPicker } from '../components/AgentPicker';
+import { ExportPanel } from '../components/ExportPanel';
+import { DocumentSaver } from '../data/DocumentSaver';
 import { ModelPicker } from '../components/ModelPicker';
 import { DiffContent } from '../components/DiffContent';
 import { Attachment, attachmentProblem } from '../domain/Attachments';
@@ -26,6 +30,23 @@ struct Index {
   @StorageLink('appForeground') @Watch('foregroundChanged') foreground: boolean = true;
   @State follow: boolean = true;
   @State switchingModel: boolean = false;
+  @State savingExport: boolean = false;
+  @State exportNotice: string = '';
+  private async selectAgent(id: string): Promise<void> {
+    const scope = this.store.connected + '/' + this.store.sessionID;
+    if (await this.store.chooseAgent(id) && scope === this.store.connected + '/' + this.store.sessionID && this.sheetKind === 'agent') { this.toolSheetOpen = false; }
+  }
+  private async exportConversation(format: string, tools: boolean): Promise<void> {
+    if (this.savingExport) { return; } this.exportNotice = '';
+    const scope = this.store.exportScope();
+    const document = await this.store.prepareExport(format, tools);
+    if (!document || scope !== this.store.exportScope() || !this.toolSheetOpen || this.sheetKind !== 'export') { return; }
+    this.savingExport = true;
+    try { const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const saved = await new DocumentSaver(context).saveText(document.name, document.text, (): boolean => scope === this.store.exportScope());
+      if (scope === this.store.exportScope()) { this.exportNotice = saved ? '已保存 ' + document.count + ' 条对话' : '已取消保存，可重新导出'; }
+    } catch (_) { this.exportNotice = '文件未保存，请重试'; } finally { this.savingExport = false; }
+  }
   private async selectModel(id: string): Promise<void> {
     if (this.switchingModel || !this.store.sessionID) { return; }
     if (id === this.store.modelID) { this.toolSheetOpen = false; return; }
@@ -98,7 +119,7 @@ struct Index {
   private storeChanged(): void {
     this.syncNavigation();
     const session = this.store.connected + '/' + this.store.sessionID;
-    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment' || this.sheetKind === 'model') { this.toolSheetOpen = false; } this.follow = true; }
+    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment' || this.sheetKind === 'model' || this.sheetKind === 'agent' || this.sheetKind === 'export') { this.toolSheetOpen = false; } this.follow = true; }
     if (this.viewMessages === this.store.messages && this.viewInteractions === this.store.interactions) { return; }
     this.viewMessages = this.store.messages; this.viewInteractions = this.store.interactions;
     const active = this.store.messages.filter((m: ChatMessage) => reasoningInProgress(m)).map((m: ChatMessage) => m.id);
@@ -309,7 +330,13 @@ struct Index {
       if (this.store.connected) {
         Row({ space: 8 }) {
           Text(this.store.sessionTitle || '新对话').fontSize(12).fontColor(C.secondary).maxLines(1).layoutWeight(1)
+          if (this.store.sessionID) {
+            Button(this.store.agents.find((a: AgentItem) => a.id === this.store.agentID)?.name || this.store.agentID || '默认 Agent', { type: ButtonType.Capsule }).id('agent-select')
+              .fontSize(11).height(28).constraintSize({ maxWidth: 150 }).labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis }).buttonStyle(ButtonStyleMode.TEXTUAL)
+              .onClick(() => { this.sheetKind = 'agent'; this.toolSheetOpen = true; this.store.refreshAgentState(); })
+          }
           if (this.store.status !== '实时连接' && this.store.status !== '已连接') { Text(this.store.status).fontSize(11).fontColor(C.warning) }
+          if (this.store.agentUncertain) { Text('Agent 待确认').fontSize(11).fontColor(C.warning) }
           if (this.store.interactions.length) { Text('等待你处理').fontSize(11).fontColor(C.warning) }
           else if (this.store.working) { Text('正在运行').fontSize(11).fontColor(C.secondary) }
         }.padding({ left: 22, right: 22, bottom: 8 }).width('100%').constraintSize({ maxWidth: 860 })
@@ -385,7 +412,7 @@ struct Index {
               if (this.store.pendingSend) { Text('重试').fontSize(10).fontColor(C.on_accent) }
               else { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(18).fontColor([this.store.draft.trim() || this.store.attachments.length ? C.on_accent : C.muted]) }
             }.id('send-button').accessibilityText(this.store.pendingSend ? '重试发送' : '发送消息').width(36).padding(0).height(36).margin({ bottom: 3 })
-              .backgroundColor(this.store.draft.trim() || this.store.attachments.length || this.store.pendingSend ? C.accent : C.field).enabled(!this.store.busy && !this.pickingAttachments && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.attachments.length || !!this.store.pendingSend))
+              .backgroundColor(this.store.draft.trim() || this.store.attachments.length || this.store.pendingSend ? C.accent : C.field).enabled(!this.store.busy && !this.store.agentBusy && !this.store.agentUncertain && !this.pickingAttachments && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.attachments.length || !!this.store.pendingSend))
               .onClick(() => { this.follow = true; this.store.send(); })
           }
         }.alignItems(VerticalAlign.Bottom).padding({ left: 14, right: 8, top: 4, bottom: 4 }).width('100%')
@@ -510,6 +537,8 @@ struct Index {
   @Builder
   sheetContent() {
     if (this.sheetKind === 'tool') { this.toolDetails() }
+    else if (this.sheetKind === 'agent') { AgentPicker({ agents: this.store.agents, current: this.store.agentID, busy: this.store.agentBusy, loading: this.store.agentLoading, error: this.store.agentError, blocked: this.store.agentUncertain ? '请先重新读取，确认当前 Agent。' : this.store.working || this.store.pendingSend || this.store.interactions.length || this.store.permissionError ? '请先结束当前任务并处理问题或审批。' : '', onSelect: (id: string): void => { this.selectAgent(id); }, onRefresh: (): void => { this.store.refreshAgentState(); } }) }
+    else if (this.sheetKind === 'export') { ExportPanel({ busy: this.store.exporting, saving: this.savingExport, count: this.store.exportCount, error: this.store.exportError, notice: this.exportNotice, onExport: (format: string, tools: boolean): void => { this.exportConversation(format, tools); }, onCancel: (): void => { this.store.cancelExport(); } }) }
     else if (this.sheetKind === 'model') { ModelPicker({ models: this.store.models, current: this.store.modelID, busy: this.switchingModel, error: this.store.error, onSelect: (id: string): void => { this.selectModel(id); }, onManage: (): void => { this.toolSheetOpen = false; this.navigate('settings'); } }) }
     else if (this.sheetKind === 'attachment') { AttachmentPreview({ item: this.selectedAttachment, saving: this.savingAttachment, onSave: (item: Attachment): void => { this.saveAttachment(item); }, onCopy: (text: string): void => { this.copy(text); } }) }
     else if (this.sheetKind === 'session') { this.sessionActions() }
@@ -522,6 +551,7 @@ struct Index {
         Button('模型与接入').enabled(!!this.store.connected).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('settings'); })
         Button('服务器连接').width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('connections'); })
         Button('外观').width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('appearance'); })
+        Button('导出当前会话').id('open-export').enabled(!!this.store.sessionID && !this.savingExport).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.store.exportError = ''; this.exportNotice = ''; this.sheetKind = 'export'; })
         Button('同步当前对话').enabled(!!this.store.sessionID).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.toolSheetOpen = false; this.store.sync(); })
       }.padding({ left: 20, right: 20, top: 24, bottom: 20 }).width('100%')
     }
@@ -693,6 +723,6 @@ struct Index {
       .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { this.sidebarOpen = show; })
       .width('100%').height('100%').backgroundColor(C.page).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .onAreaChange((oldArea: Area, newArea: Area) => { this.viewportWidth = Number(newArea.width); const wide = this.viewportWidth >= 840; if (this.wide !== wide) { this.wide = wide; this.sidebarOpen = wide; } })
-      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' || this.sheetKind === 'attachment' || this.sheetKind === 'model' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true })
+      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' || this.sheetKind === 'attachment' || this.sheetKind === 'model' || this.sheetKind === 'agent' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true, onDisappear: (): void => { if (this.store.exporting) { this.store.cancelExport(); } } })
   }
 }

@@ -1,3 +1,5 @@
+import { AgentItem } from '../domain/Agents';
+import { TranscriptExporter, ExportDocument, ExportCancelled } from '../domain/TranscriptExport';
 import { Attachment, PromptFile, attachmentProblem, promptFiles, ATTACHMENT_LIMIT, attachmentBytes } from '../domain/Attachments';
 import { common } from '@kit.AbilityKit';
 import { http } from '@kit.NetworkKit';
@@ -12,6 +14,7 @@ interface LocationRequest { directory: string; }
 interface PromptRequest { id: string; text: string; delivery: string; resume: boolean; files?: PromptFile[]; }
 interface ModelRef { id: string; providerID: string; }
 interface ModelRequest { model: ModelRef; }
+interface AgentRequest { agent: string; }
 interface AnswerRequest { answer: Record<string, FieldValue>; }
 interface PermissionReply { decision: string; }
 interface PendingScope { directory: string; kind: string; }
@@ -53,6 +56,19 @@ export class AppStore {
   sessionTitle: string = '';
   models: ModelItem[] = [];
   modelID: string = '';
+  agents: AgentItem[] = [];
+  agentID: string = '';
+  agentError: string = '';
+  agentBusy: boolean = false;
+  agentLoading: boolean = false;
+  agentUncertain: boolean = false;
+  private agentEpoch: number = 0;
+  private selectionEpoch: number = 0;
+  exporting: boolean = false;
+  exportCount: number = 0;
+  exportError: string = '';
+  private exportEpoch: number = 0;
+  private exportJob: TranscriptExporter | undefined = undefined;
   messages: ChatMessage[] = [];
   interactions: Interaction[] = [];
   permissionError: string = '';
@@ -321,6 +337,7 @@ export class AppStore {
     this.pendingEpoch++; this.sessionsEpoch++; this.preferenceEpoch++; this.pendingItems = []; this.pendingError = ''; this.pendingUpdated = 0; this.pendingBusy = false;
     this.sessionCursor = ''; this.sessionQuery = ''; this.sessionsBusy = false; this.sessionsError = ''; this.sessionPreferences = [];
     this.sessionMutationBusy = false; this.sessionPreferenceBusy = false; this.runningSessions = []; this.runningUnknown = false; this.showArchived = false;
+    this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(undefined, '', async (): Promise<void> => {});
     this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接';
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
@@ -439,6 +456,7 @@ export class AppStore {
     if (!this.stashConversation()) { return; }
     this.sessionsEpoch++; this.sessionCursor = ''; this.sessionQuery = ''; this.sessionsBusy = false; this.sessionsError = ''; this.showArchived = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
+    this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(api, directory.trim(), async (): Promise<void> => { await this.refreshModels(); });
     this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.directory = directory.trim(); this.sessionID = ''; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
     this.fileContent = ''; this.filePath = ''; this.files = []; this.fileTruncated = false; this.cursor = ''; this.tailLoaded = false; this.readingHistory = false; this.newerAvailable = false; this.transcriptEpoch++; this.error = ''; this.busy = true; this.syncing = false;
@@ -447,6 +465,7 @@ export class AppStore {
       const page = await api.sessionPage(this.directory);
       const models = await api.models(this.directory);
       if (generation !== this.generation) { return; }
+      await this.loadAgents(); if (generation !== this.generation) { return; }
       this.sessions = page.sessions; this.sessionCursor = page.cursor; this.models = models; this.manualPath = this.directory; this.pane = 'projects';
       this.savePosition(); this.openStream(); this.queueWorkspace();
     } catch (e) { if (generation === this.generation) { this.sessionsError = (e as Error).message; this.fail(e as Error); this.openStream(); } }
@@ -475,6 +494,7 @@ export class AppStore {
       await this.selectProject(session.directory);
       if (api !== this.api || this.directory !== session.directory || this.sessionsError) { return; }
     }
+    this.cancelExport(); this.agentEpoch++; this.agentID = session.agent || ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model;
@@ -487,7 +507,7 @@ export class AppStore {
     if (!this.api || !this.sessionID || !this.active || this.networkBlocked) { return; }
     if (this.syncing) { this.syncAgain = true; return; }
     this.syncing = true; const generation = this.generation; const api = this.api;
-    const id = this.sessionID; const epoch = this.eventEpoch; const transcript = this.transcriptEpoch;
+    const id = this.sessionID; const epoch = this.eventEpoch; const transcript = this.transcriptEpoch; const selection = this.selectionEpoch;
     try {
       const response = await api.messages(id);
       if (generation !== this.generation || transcript !== this.transcriptEpoch) { return; }
@@ -531,7 +551,11 @@ export class AppStore {
         if (active[id] !== undefined || inbox.length > 0) { this.working = true; }
         else if (detail['outcome']) { this.working = false; }
         const model = object(detail['model']);
-        if (model['id']) { this.modelID = string(model['providerID']) + '/' + string(model['id']); }
+        if (selection === this.selectionEpoch) {
+          this.agentID = string(detail['agent']);
+          if (model['id']) { this.modelID = string(model['providerID']) + '/' + string(model['id']); }
+          else { this.modelID = this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; }
+        }
       }
     } catch (e) {
       if (generation === this.generation) {
@@ -605,7 +629,7 @@ export class AppStore {
     } catch (_) { return { id: item.id, name: item.name, mime: item.mime, size: item.size, data: '', error: '读取失败，请关闭后重试' }; }
   }
   async send(): Promise<void> {
-    if (!this.api || !this.sessionID || this.busy || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
+    if (!this.api || !this.sessionID || this.busy || this.agentBusy || this.agentUncertain || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
     const pending: PendingPrompt = this.pendingSend || {
       id: 'msg_' + Date.now().toString(36) + Math.random().toString(36).slice(2),
       sessionID: this.sessionID, text: this.draft.trim(), files: this.attachments.map((a: Attachment): Attachment => ({ id: a.id, name: a.name, mime: a.mime, data: a.data, size: a.size }))
@@ -634,14 +658,78 @@ export class AppStore {
     catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
     finally { if (generation === this.generation) { this.interrupting = false; } }
   }
+  async loadAgents(): Promise<void> {
+    if (!this.api || !this.directory) { return; } const api = this.api; const generation = this.generation; const epoch = ++this.agentEpoch;
+    this.agentLoading = true;
+    try { const agents = await api.agents(this.directory); if (generation === this.generation && epoch === this.agentEpoch) { this.agents = agents; this.agentError = ''; } }
+    catch (e) { if (generation === this.generation && epoch === this.agentEpoch) { this.agentError = 'Agent 列表读取失败，请重新读取；聊天仍可使用当前 Agent。'; if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { this.fail(e as Error); } } }
+    finally { if (generation === this.generation && epoch === this.agentEpoch) { this.agentLoading = false; } }
+  }
+  private async readAgentState(api: Protocol, id: string, generation: number): Promise<void> {
+    const session = await api.session(id);
+    if (generation !== this.generation || id !== this.sessionID) { return; }
+    this.selectionEpoch++; this.agentID = session.agent || ''; this.modelID = session.model || this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; this.agentUncertain = false;
+  }
+  async refreshAgentState(): Promise<void> {
+    if (!this.api || this.agentBusy || this.agentLoading) { return; } const api = this.api; const id = this.sessionID; const generation = this.generation;
+    await this.loadAgents();
+    if (generation !== this.generation || !id) { return; }
+    this.agentLoading = true;
+    try { await this.readAgentState(api, id, generation); }
+    catch (e) { if (generation === this.generation) { this.agentError = '当前 Agent 尚未确认，请恢复连接后重新读取。'; this.agentUncertain = true; if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { this.fail(e as Error); } } }
+    finally { if (generation === this.generation) { this.agentLoading = false; } }
+  }
+  async chooseAgent(id: string): Promise<boolean> {
+    if (!this.api || !this.sessionID || this.busy || this.agentBusy || this.agentLoading || this.agentUncertain) { return false; }
+    if (id === this.agentID) { return true; }
+    if (!this.agents.some((a: AgentItem) => a.id === id)) { this.agentError = '请从当前服务器的可用 Agent 中选择'; return false; }
+    if (this.working || this.pendingSend || this.interactions.length || this.permissionError) { this.agentError = '请先结束当前任务并处理问题或审批，再切换 Agent'; return false; }
+    const api = this.api; const session = this.sessionID; const directory = this.directory; const generation = this.generation;
+    this.agentBusy = true; this.agentError = ''; this.selectionEpoch++; let submitted = false; let accepted = false;
+    try {
+      const checks = await Promise.all([api.request('/api/session/active'), api.interactions(session, 'form', directory), api.interactions(session, 'permission', directory)]);
+      if (generation !== this.generation) { return false; }
+      if (object(object(checks[0])['data'])[session] !== undefined || (checks[1] as Interaction[]).length || (checks[2] as Interaction[]).length) { this.agentError = '当前任务或待办已更新，请先处理后再切换 Agent'; return false; }
+      submitted = true; await api.request('/api/session/' + encodeURIComponent(session) + '/agent', http.RequestMethod.POST, { agent: id } as AgentRequest); accepted = true;
+      if (generation !== this.generation) { return false; }
+      await this.readAgentState(api, session, generation);
+      if (generation !== this.generation) { return false; }
+      if (this.agentID !== id) { this.agentError = '服务器当前使用其他 Agent，请核对后再选择'; return false; }
+      return true;
+    } catch (e) {
+      if (generation === this.generation) {
+        this.agentUncertain = submitted && (accepted || !(e instanceof ApiError) || e.code >= 500);
+        this.agentError = this.agentUncertain ? '切换结果待确认，请重新读取状态；不会自动重复提交。' : (e as Error).message || 'Agent 切换失败，请重试';
+        if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { this.fail(e as Error); }
+      } return false;
+    } finally { if (generation === this.generation) { this.agentBusy = false; } }
+  }
+  exportScope(): string { return this.connected + '/' + this.directory + '/' + this.sessionID + '/' + this.generation; }
+  cancelExport(): void {
+    if (!this.exportJob) { return; } this.exportJob.cancel(); this.exportJob = undefined; this.exportEpoch++; this.exporting = false; this.exportError = '已取消导出';
+  }
+  async prepareExport(format: string, tools: boolean): Promise<ExportDocument | undefined> {
+    if (!this.api || !this.sessionID || this.exporting) { return undefined; }
+    const api = this.api; const generation = this.generation; const epoch = ++this.exportEpoch; const job = new TranscriptExporter(); this.exportJob = job;
+    this.exporting = true; this.exportCount = 0; this.exportError = '';
+    try {
+      const document = await job.prepare(api, { id: this.sessionID, title: this.sessionTitle, format: format, tools: tools }, (count: number): void => {
+        if (generation === this.generation && epoch === this.exportEpoch) { this.exportCount = count; }
+      });
+      return generation === this.generation && epoch === this.exportEpoch ? document : undefined;
+    } catch (e) {
+      if (generation === this.generation && epoch === this.exportEpoch && !(e instanceof ExportCancelled)) { this.exportError = (e as Error).message || '导出未完成，请重试'; if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { this.fail(e as Error); } }
+      return undefined;
+    } finally { if (generation === this.generation && epoch === this.exportEpoch) { this.exporting = false; this.exportJob = undefined; } }
+  }
   async chooseModel(id: string): Promise<void> {
-    if (!this.api || !this.sessionID) { return; }
-    const slash = id.indexOf('/'); const generation = this.generation; this.error = '';
+    if (!this.api || !this.sessionID || this.agentBusy || this.agentUncertain) { return; }
+    const slash = id.indexOf('/'); const generation = this.generation; this.selectionEpoch++; this.error = '';
     try {
       await this.api.request(this.sessionPath() + '/model', http.RequestMethod.POST,
         { model: { id: id.slice(slash + 1), providerID: id.slice(0, slash) } } as ModelRequest);
       if (generation === this.generation) {
-        this.modelID = id;
+        this.selectionEpoch++; this.modelID = id;
         if (this.connected) {
           this.servers = this.servers.map((s: ServerConfig): ServerConfig => ({ id: s.id, name: s.name, url: s.url,
             username: s.username, allowHttp: s.allowHttp, useDedicatedTrust: s.useDedicatedTrust,

@@ -1,3 +1,4 @@
+import { DocumentSaver } from './DocumentSaver';
 import { common } from '@kit.AbilityKit';
 import { picker, fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -56,20 +57,8 @@ export class AttachmentPicker {
     return item;
   }
   async save(item: Attachment): Promise<boolean> {
-    let file: fileIo.File | undefined = undefined;
-    try {
-      if (!item.data) { throw new Error('附件内容尚未载入'); }
-      const targets = await new picker.DocumentViewPicker(this.context).save({ newFileNames: [item.name.replace(/[\\/:*?"<>|]/g, '_')] });
-      if (!targets.length) { return false; }
-      file = await fileIo.open(targets[0], fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
-      const bytes = new util.Base64Helper().decodeSync(item.data); let offset = 0;
-      while (offset < bytes.byteLength) {
-        const part = bytes.slice(offset); const count = await fileIo.write(file.fd, part.buffer, { length: part.byteLength });
-        if (count <= 0) { throw new Error('文件写入不完整，请重试'); } offset += count;
-      }
-      await fileIo.fsync(file.fd); return true;
-    } catch (_) { throw new Error('文件未保存，请重试'); }
-    finally { if (file) { await fileIo.close(file).catch(() => {}); } }
+    if (!item.data) { throw new Error('附件内容尚未载入'); }
+    return new DocumentSaver(this.context).save(item.name, new util.Base64Helper().decodeSync(item.data));
   }
   private async compress(fd: number): Promise<ArrayBuffer> {
     const source = image.createImageSource(fd); const packer = image.createImagePacker(); let pixels: image.PixelMap | undefined = undefined;

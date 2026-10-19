@@ -40,6 +40,8 @@ function load(file, key) {
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
 const trust = load('entry/src/main/ets/data/DedicatedTrust.ets', './DedicatedTrust');
+const agentsDomain=load('entry/src/main/ets/domain/Agents.ts', '../domain/Agents');
+const exportsDomain=load('entry/src/main/ets/domain/TranscriptExport.ts', '../domain/TranscriptExport');
 const protocol = load('entry/src/main/ets/data/Protocol.ets', '../data/Protocol');
 const { ProviderStore } = load('entry/src/main/ets/presentation/ProviderStore.ets', './ProviderStore');
 const { AppStore } = load('entry/src/main/ets/presentation/AppStore.ets', 'store');
