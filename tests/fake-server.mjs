@@ -27,6 +27,8 @@ let sequence = 0;
 let model = { id: 'fixture-coder', providerID: 'fixture' };
 const session = { id: 'ses_fixture', title: '本机联调 · 八项流程', agent:'fixture-build', location: { directory }, model,
   projectID: 'prj_fixture', time: { created: Date.now(), updated: Date.now() }, cost: 0, tokens: {} };
+const fixtureSessions=new Map([[session.id,session]]), fixtureMessages=new Map([[session.id,messages]]), fixtureCompactions=new Map(), controlActive=new Set();
+let forkFailure=false,forkLost=false,compactFailure=false,compactLost=false;
 const send = (res, value, status = 200) => {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(status === 204 ? '' : JSON.stringify(value));
@@ -82,6 +84,23 @@ async function runPrompt(text) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const path = url.pathname;
+  if (path === '/__test/control-history' && req.method==='POST') {
+    messages.splice(0);messages.push({id:'control_user_first',type:'user',text:'CONTROL_FIRST_QUESTION',time:{created:1}},{id:'control_assistant_first',type:'assistant',content:[{type:'text',text:'CONTROL_FIRST_ANSWER'}],time:{created:2,completed:3}},
+      {id:'control_user_edit',type:'user',text:'CONTROL_ORIGINAL_QUESTION',files:[{name:'original.txt',mime:'text/plain',data:Buffer.from('CONTROL_ATTACHMENT').toString('base64')}],time:{created:4}},
+      {id:'control_assistant_last',type:'assistant',content:[{type:'text',text:'CONTROL_LATEST_ANSWER'}],time:{created:5,completed:6}});
+    forms.splice(0);permissions.splice(0);active=false;controlActive.clear();fixtureCompactions.clear();session.title='会话功能验收';session.outcome='succeeded';session.cost=0.0125;session.tokens={input:12345,output:456,reasoning:78,cache:{read:90,write:12}};
+    return send(res,{ready:true});
+  }
+  for(const [route,key] of [['fork-failure','forkFailure'],['fork-lost','forkLost'],['compact-failure','compactFailure'],['compact-lost','compactLost']])if(path==='/__test/'+route&&req.method==='POST'){
+    const enabled=url.searchParams.get('enabled')==='1';if(key==='forkFailure')forkFailure=enabled;if(key==='forkLost')forkLost=enabled;if(key==='compactFailure')compactFailure=enabled;if(key==='compactLost')compactLost=enabled;return send(res,{enabled});
+  }
+  if(path==='/__test/compact-phase'&&req.method==='POST'){
+    const id=url.searchParams.get('sessionID')||session.id,phase=url.searchParams.get('phase'),record=fixtureCompactions.get(id),target=fixtureSessions.get(id);
+    if(!record||!['running','completed','failed'].includes(phase))return send(res,{error:'No matching compaction'},400);
+    record.phase=phase;const rows=fixtureMessages.get(id);const raw={id:record.item.id,type:'compaction',status:phase,reason:'manual',summary:'本机压缩摘要',recent:'本机测试记录',time:{created:Date.now()},...(phase==='failed'?{error:{message:'Controlled model failure'}}:{})};const index=rows.findIndex(m=>m.id===raw.id);if(index<0)rows.push(raw);else rows[index]=raw;
+    if(phase==='running')controlActive.add(id);else{controlActive.delete(id);target.outcome=phase==='completed'?'succeeded':'failed';if(phase==='completed')target.cost=0.02;}
+    event('session.idle',{sessionID:id});return send(res,{phase,id:record.item.id});
+  }
   if (path === '/__test/permission-read-failure' && req.method === 'POST') { permissionReadFailure = url.searchParams.get('enabled') === '1'; return send(res, { permissionReadFailure }); }
   if (path === '/__test/approval' && req.method === 'POST') { if (!permissions.length) permissions.push(permission()); event('permission.asked', permissions[0]); return send(res, { created: true }); }
   if (path === '/__test/ui-phase' && req.method === 'POST') {
@@ -118,7 +137,7 @@ const server = http.createServer(async (req, res) => {
     for(let i=0;i<360;i++)messages.push(i%2===0?{id:'export_'+i,type:'user',text:'EXPORT_ENTRY_'+String(i).padStart(3,'0'),files:i===0?[{name:'metadata-only.txt',mime:'text/plain',data:Buffer.from('EXPORT_INLINE_PRIVATE').toString('base64')}]:[],time:{created:i+1}}:{id:'export_'+i,type:'assistant',content:[{type:'reasoning',text:'EXPORT_REASONING'},{type:'text',text:'EXPORT_ENTRY_'+String(i).padStart(3,'0')},...(i===359?[{type:'tool',id:'fixture-export-tool',name:'read',state:{status:'completed',input:{path:'test.txt'},content:[{type:'text',text:'EXPORT_TOOL_OUTPUT'}]}}]:[])],time:{created:i+1,completed:i+2}});
     event('session.idle',{sessionID:session.id});return send(res,{ready:true});
   }
-  if (path === '/__test/state') return send(res, { receipts, historyReads,title:session.title,agent:session.agent,model:session.model,messages: messages.length, forms, permissions, streams: streams.size });
+  if (path === '/__test/state') return send(res, { receipts, sessions:[...fixtureSessions.values()].map(s=>({id:s.id,parentID:s.parentID,title:s.title,fork:s.fork})), compactions:[...fixtureCompactions.entries()].map(([id,c])=>({sessionID:id,id:c.item.id,phase:c.phase})), historyReads,title:session.title,agent:session.agent,model:session.model,messages: messages.length, forms, permissions, streams: streams.size });
   if (path === '/__test/disconnect') {
     for (const stream of streams) stream.end();
     return send(res, { disconnected: true });
@@ -132,27 +151,47 @@ const server = http.createServer(async (req, res) => {
   let input = {};
   try { input = body ? JSON.parse(body) : {}; } catch { return send(res, { error: 'Invalid JSON' }, 400); }
   if (req.method !== 'GET') receipts.push({ method: req.method, path, query: url.search, input });
+  const controlPath=path.match(/^\/api\/session\/([^/]+)(.*)$/),targetID=controlPath?.[1],suffix=controlPath?.[2],target=fixtureSessions.get(targetID);
+  if(target){
+    const history=fixtureMessages.get(targetID);
+    if(!suffix&&req.method==='GET')return send(res,{data:target});
+    if(suffix==='/fork'&&req.method==='POST'){
+      if(forkFailure)return send(res,{error:'Controlled fork rejection'},400);
+      const end=input.before?history.findIndex(m=>m.id===input.before):history.length;if(end<0||!history.length)return send(res,{error:'Missing boundary'},400);
+      const id='ses_fork_'+randomUUID().replaceAll('-',''),child={...target,id,title:'分支 '+fixtureSessions.size,parentID:targetID,fork:{sessionID:targetID,boundary:{type:input.before?'before':'through',messageID:input.before||history.at(-1).id}},cost:0,tokens:{input:0,output:0,reasoning:0,cache:{read:0,write:0}},time:{created:Date.now(),updated:Date.now()}};
+      fixtureSessions.set(id,child);fixtureMessages.set(id,structuredClone(history.slice(0,end)));return forkLost?send(res,{error:'Controlled fork acknowledgement loss'},503):send(res,{data:child});
+    }
+    if(suffix==='/compact'&&req.method==='POST'){
+      if(compactFailure)return send(res,{error:'Controlled compact rejection'},400);
+      const existing=fixtureCompactions.get(targetID);if(existing?.item.id===input.id)return send(res,{data:existing.item});
+      const item={id:input.id,sessionID:targetID,type:'compaction',delivery:input.delivery,payload:{},time:{created:Date.now()}};fixtureCompactions.set(targetID,{item,phase:'queued'});controlActive.add(targetID);return compactLost?send(res,{error:'Controlled compact acknowledgement loss'},503):send(res,{data:item});
+    }
+    if(suffix==='/inbox'){const record=fixtureCompactions.get(targetID);return send(res,{data:record?.phase==='queued'?[record.item]:[]});}
+    if(suffix==='/message'){
+      const limit=Math.min(100,Number(url.searchParams.get('limit')||30));const token=url.searchParams.get('cursor');const[direction,position]=token?token.split(':'):[url.searchParams.get('order')||'desc','0'];const start=Number(position);historyReads.push({direction,start,limit});
+      if(direction==='asc'&&exportFailure)return send(res,{error:'Controlled export failure'},503);if(direction==='asc'&&exportDelay)await new Promise(r=>setTimeout(r,1500));const rows=direction==='asc'?[...history]:[...history].reverse();return send(res,{data:rows.slice(start,start+limit),cursor:{next:start+limit<rows.length?direction+':'+(start+limit):''}});
+    }
+    if(suffix.startsWith('/message/')){const row=history.find(m=>m.id===decodeURIComponent(suffix.slice('/message/'.length)));return row?send(res,{data:row}):send(res,{error:'Missing message'},404);}
+    if(targetID!==session.id&&(suffix==='/form'||suffix==='/permission'))return send(res,{data:[]});
+    if(targetID!==session.id&&suffix==='/prompt'){
+      if(!history.some(m=>m.id===input.id))history.push({id:input.id,type:'user',text:input.text,files:(input.files||[]).map(f=>{const m=f.uri?.match(/^data:([^;]+);base64,(.*)$/s);return{name:f.name,mime:m?.[1]||'text/plain',data:m?.[2]||''};}),time:{created:Date.now()}},{id:'reply_'+input.id,type:'assistant',content:[{type:'text',text:'本机分支已收到编辑后的问题'}],time:{created:Date.now(),completed:Date.now()}});target.outcome='succeeded';return send(res,{},204);
+    }
+  }
   if (path === '/api/info') return send(res, { version: '2.0.29', pid: process.pid, urls: [], paths: { tmp: '/tmp' } });
   if (path === '/api/project') return send(res, [{ id: 'prj_fixture', canonical: directory, name: 'Harmony Fixture', sandboxes: [], time: {} }]);
   if (path === '/api/location') return send(res, { directory, project: { id: 'prj_fixture', directory, canonical: directory } });
   if (path === '/api/session' && req.method === 'POST') return send(res, { data: session });
-  if (path === '/api/session') return send(res, { data: [session], cursor: {} });
+  if (path === '/api/session') return send(res, { data: [...fixtureSessions.values()].reverse(), cursor: {} });
   if (path === '/api/form') return send(res, { location: { directory }, data: forms });
   if (path === '/api/permission/request') return permissionReadFailure ? send(res, { error: 'Controlled approval read failure' }, 400) : send(res, { location: { directory }, data: permissions });
   if (path === '/api/session/' + session.id && req.method === 'PATCH') { session.title = input.title; return send(res, {}, 204); }
-  if (path === '/api/session/active') return send(res, { data: active ? { [session.id]: { type: 'running' } } : {} });
+  if (path === '/api/session/active') return send(res, { data: Object.fromEntries([...new Set([...(active?[session.id]:[]),...controlActive])].map(id=>[id,{type:'running'}])) });
   if (path === '/api/agent') return send(res,{location:{directory},data:agents});
   if (path === '/api/model') return send(res, { location: { directory }, data: [
-    { id: 'fixture/fixture-coder', modelID: 'fixture-coder', providerID: 'fixture', name: '本机测试模型', enabled: true, status: 'active' },
+    { id: 'fixture/fixture-coder', modelID: 'fixture-coder', providerID: 'fixture', name: '本机测试模型', limit:{context:128000,output:8192}, enabled: true, status: 'active' },
     { id: 'fixture/fixture-second', modelID: 'fixture-second', providerID: 'fixture', name: '模型切换测试', enabled: true, status: 'active' },
     ...Array.from({length:75},(_,i)=>({modelID:'model-'+String(i).padStart(3,'0'),providerID:'fixture-extra',name:'测试模型'+String(i).padStart(3,'0'),enabled:true,capabilities:{input:i%2===0?['text','image']:['text','pdf']}}))
   ] });
-  if (path.endsWith('/message')) {
-    const limit=Math.min(100,Number(url.searchParams.get('limit')||30));const token=url.searchParams.get('cursor');const [direction,position]=token?token.split(':'):[url.searchParams.get('order')||'desc','0'];const start=Number(position);historyReads.push({direction,start,limit});
-    if(direction==='asc'&&exportFailure)return send(res,{error:'Controlled export failure'},503);
-    if(direction==='asc'&&exportDelay)await new Promise(r=>setTimeout(r,1500));
-    const rows=direction==='asc'?[...messages]:[...messages].reverse();return send(res,{data:rows.slice(start,start+limit),cursor:{next:start+limit<rows.length?direction+':'+(start+limit):''}});
-  }
   if (path.endsWith('/agent') && req.method==='POST') {
     if(agentFailure)return send(res,{error:'Controlled Agent rejection'},400);
     const selected=agents.find(a=>a.id===input.agent&&!a.hidden&&a.mode==='primary');if(!selected)return send(res,{error:'Invalid Agent'},400);

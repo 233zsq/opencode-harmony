@@ -24,4 +24,6 @@ await test('bookmark persistence reports an unavailable preferences store or fai
 const {copyText}=load('entry/src/main/ets/presentation/Clipboard.ets');
 await test('clipboard preserves complete code and Unicode as plain text',async()=>{const text='const value = "中文🌿";\n  keep indentation';await copyText(text);assert.equal(copied[0].type,'text/plain');assert.equal(copied[0].text,text);});
 await test('copying an empty message leaves the clipboard untouched',async()=>{await copyText('');assert.equal(copied.length,1);});
+await test('resetting connection metadata clears only its session position and bookmarks',async()=>{await storage.position('one','/private','s');await storage.position('two','/other','other');await storage.saveSessionPreferences('one',[{id:'s',pinned:true}]);await storage.resetServerPosition('one');assert.equal((await storage.last('one')).length,0);assert.equal((await storage.sessionPreferences('one')).length,0);assert.equal((await storage.last('two'))[1],'other');});
+await test('connection metadata reset propagates missing-store and flush errors',async()=>{await assert.rejects(()=>new Storage().resetServerPosition('one'),/尚未就绪/);failFlush=true;await assert.rejects(()=>storage.resetServerPosition('one'),/disk full/);failFlush=false;});
 console.log(count+' local storage/clipboard tests passed.');

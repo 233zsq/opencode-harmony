@@ -1,3 +1,5 @@
+import { ForkPanel } from '../components/ForkPanel';
+import { UsagePanel } from '../components/UsagePanel';
 import { AgentItem } from '../domain/Agents';
 import { AgentPicker } from '../components/AgentPicker';
 import { ExportPanel } from '../components/ExportPanel';
@@ -53,6 +55,37 @@ struct Index {
     const scope = this.store.connected + '/' + this.store.sessionID; this.switchingModel = true;
     try { await this.store.chooseModel(id); if (scope === this.store.connected + '/' + this.store.sessionID && this.store.modelID === id && !this.store.error) { this.toolSheetOpen = false; } }
     finally { this.switchingModel = false; }
+  }
+  @State forkBefore: string = '';
+  @State forkEditing: boolean = false;
+  @State forkText: string = '';
+  @State forkSource: string = '';
+  @State forkHasFiles: boolean = false;
+  @State forkScope: string = '';
+  private connectionScroller: Scroller = new Scroller();
+  private openFork(message?: ChatMessage, edit: boolean = false): void {
+    this.forkBefore = message?.id || ''; this.forkEditing = edit; this.forkText = edit ? message?.text || '' : ''; this.forkSource = message ? message.text.slice(0, 180) || '所选消息包含附件或工具内容' : '';
+    this.forkHasFiles = !!message?.files?.length; this.forkScope = this.store.exportScope(); this.store.forkError = ''; this.sheetKind = 'fork'; this.toolSheetOpen = true;
+  }
+  private async createFork(text: string, reuse: boolean): Promise<void> {
+    const scope = this.forkScope; if (scope !== this.store.exportScope()) { return; }
+    const child = await this.store.forkSession(this.forkBefore, this.forkEditing, text, reuse);
+    if (!child || scope !== this.store.exportScope()) { return; }
+    if (this.toolSheetOpen && this.sheetKind === 'fork') { this.toolSheetOpen = false; this.follow = true; await this.store.openSession(child); }
+    else { this.toast('分支已创建，可在会话列表打开'); }
+  }
+  private confirmRemoveServer(server: ServerConfig): void {
+    this.getUIContext().showAlertDialog({ title: '移除连接', message: '从本机移除“' + server.name + '”的配置、凭据和会话位置。服务器任务与聊天历史仍会保留。',
+      primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '移除', action: (): void => { this.store.removeServer(server.id); } } });
+  }
+  private confirmCompaction(): void {
+    const scope = this.store.exportScope();
+    this.getUIContext().showAlertDialog({ title: '压缩上下文', message: '将调用当前模型生成摘要，可能产生费用。是否继续？', primaryButton: { value: '取消', action: (): void => {} },
+      secondaryButton: { value: '确认压缩', action: (): void => { if (scope === this.store.exportScope()) { this.store.requestCompaction(); } } } });
+  }
+  private confirmForkReview(): void {
+    const scope = this.store.exportScope(); this.getUIContext().showAlertDialog({ title: '重新创建分支', message: '请先确认会话列表没有上次创建的分支。重复操作可能创建多个分支。',
+      primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '已检查', action: (): void => { if (scope === this.store.exportScope()) { this.store.clearForkAfterReview(); } } } });
   }
   @State savingAttachment: boolean = false;
   private toast(message: string): void { try { this.getUIContext().getPromptAction().showToast({ message: message }); } catch (_) {} }
@@ -119,7 +152,7 @@ struct Index {
   private storeChanged(): void {
     this.syncNavigation();
     const session = this.store.connected + '/' + this.store.sessionID;
-    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment' || this.sheetKind === 'model' || this.sheetKind === 'agent' || this.sheetKind === 'export') { this.toolSheetOpen = false; } this.follow = true; }
+    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment' || this.sheetKind === 'model' || this.sheetKind === 'agent' || this.sheetKind === 'export' || this.sheetKind === 'fork' || this.sheetKind === 'usage') { this.toolSheetOpen = false; } this.follow = true; }
     if (this.viewMessages === this.store.messages && this.viewInteractions === this.store.interactions) { return; }
     this.viewMessages = this.store.messages; this.viewInteractions = this.store.interactions;
     const active = this.store.messages.filter((m: ChatMessage) => reasoningInProgress(m)).map((m: ChatMessage) => m.id);
@@ -176,7 +209,7 @@ struct Index {
 
   @Builder
   connections() {
-    Scroll() {
+    Scroll(this.connectionScroller) {
       Column({ space: 14 }) {
         this.heading('服务器', '连接管理', '添加或切换你的 OpenCode 服务器。')
         ForEach(this.store.servers, (server: ServerConfig) => {
@@ -190,39 +223,46 @@ struct Index {
             }
             Row({ space: 10 }) {
               Button('连接', { type: ButtonType.Capsule }).id('connect-server-' + server.id).backgroundColor(C.accent).fontColor(C.on_accent)
-                .borderRadius(9).height(36).layoutWeight(1).enabled(!this.store.busy)
+                .borderRadius(9).height(36).layoutWeight(1).enabled(!this.store.busy && !this.store.serverSaving)
                 .onClick(() => { this.store.connect(server).then(() => { if (this.store.connected) { this.store.pane = 'chat'; } }); })
+              Button('编辑', { type: ButtonType.Capsule }).id('edit-server-' + server.id).height(36).backgroundColor(C.field).fontColor(C.text).enabled(!this.store.serverSaving && !this.store.busy).onClick(() => { this.store.editServer(server); setTimeout(() => { this.connectionScroller.scrollEdge(Edge.Bottom); }, 50); })
               Button('移除', { type: ButtonType.Capsule }).id('remove-server-' + server.id).backgroundColor(C.field).fontColor(C.danger)
-                .borderRadius(9).height(36).onClick(() => { this.store.removeServer(server.id); })
+                .borderRadius(9).height(36).enabled(!this.store.serverSaving && !this.store.busy).onClick(() => { this.confirmRemoveServer(server); })
             }
           }.id('server-profile-' + server.id).padding(16).backgroundColor(C.surface).borderRadius(16).width('100%')
-        }, (server: ServerConfig) => server.id)
+        }, (server: ServerConfig) => server.id + server.name + server.url + server.username + String(server.id === this.store.connected))
         Column({ space: 12 }) {
-          Text('添加服务器').fontSize(18).fontWeight(FontWeight.Bold).fontColor(C.text).width('100%')
-          TextInput({ placeholder: '连接名称，例如：我的开发服务器', text: this.store.serverName }).id('server-name')
+          Text(this.store.serverEditID ? '编辑连接' : '添加服务器').fontSize(18).fontWeight(FontWeight.Bold).fontColor(C.text).width('100%')
+          TextInput({ placeholder: '连接名称，例如：我的开发服务器', text: this.store.serverName }).id('server-name').maxLength(80).enabled(!this.store.serverSaving && !this.store.busy)
             .onChange((value: string) => { this.store.serverName = value; }).backgroundColor(C.field).borderRadius(9).height(44)
-          TextInput({ placeholder: 'https://opencode.example.com', text: this.store.serverUrl }).id('server-url')
+          TextInput({ placeholder: 'https://opencode.example.com', text: this.store.serverUrl }).id('server-url').maxLength(2048).enabled(!this.store.serverSaving && !this.store.busy)
             .onChange((value: string) => { this.store.serverUrl = value; }).backgroundColor(C.field).borderRadius(9).height(44)
           Row({ space: 10 }) {
-            TextInput({ placeholder: 'API 用户名', text: this.store.serverUser }).id('server-user')
+            TextInput({ placeholder: 'API 用户名', text: this.store.serverUser }).id('server-user').maxLength(120).enabled(!this.store.serverSaving && !this.store.busy)
               .onChange((value: string) => { this.store.serverUser = value; }).layoutWeight(1).backgroundColor(C.field)
-            TextInput({ placeholder: 'API 密码', text: this.store.serverPassword }).id('server-password').type(InputType.Password)
+            TextInput({ placeholder: this.store.serverEditID ? '密码留空保留原密码' : 'API 密码', text: this.store.serverPassword }).id('server-password').maxLength(2048).enabled(!this.store.serverSaving && !this.store.busy).type(InputType.Password)
               .onChange((value: string) => { this.store.serverPassword = value; }).layoutWeight(1).backgroundColor(C.field)
           }
           Row({ space: 8 }) {
-            Checkbox({ name: 'allow-http' }).id('allow-http').select(this.store.allowHttp).selectedColor(C.accent).width(20).height(20)
+            Checkbox({ name: 'allow-http' }).id('allow-http').enabled(!this.store.serverSaving && !this.store.busy).select(this.store.allowHttp).selectedColor(C.accent).width(20).height(20)
               .onChange((value: boolean) => { this.store.allowHttp = value; })
             Text('允许 HTTP（仅可信局域网或本地隧道）').fontSize(11).fontColor(C.secondary).layoutWeight(1)
           }.width('100%')
           Row({ space: 8 }) {
-            Checkbox({ name: 'dedicated-trust' }).id('dedicated-trust').select(this.store.useDedicatedTrust)
+            Checkbox({ name: 'dedicated-trust' }).id('dedicated-trust').enabled(!this.store.serverSaving && !this.store.busy).select(this.store.useDedicatedTrust)
               .selectedColor(C.accent).width(20).height(20)
               .onChange((value: boolean) => { this.store.useDedicatedTrust = value; })
             Text('使用专用服务器证书（IP 临时入口）').fontSize(11).fontColor(C.secondary).layoutWeight(1)
           }.width('100%')
-          Button(this.store.busy ? '正在连接…' : '保存并连接', { type: ButtonType.Capsule }).id('connect-button')
+          if (this.store.serverEditID) {
+            Row({ space: 8 }) { Checkbox().id('server-clear-password').select(this.store.clearServerPassword).width(20).height(20).enabled(!this.store.serverSaving).onChange((value: boolean) => { this.store.clearServerPassword = value; }); Text('清除已保存密码').fontSize(12).fontColor(C.secondary) }.width('100%')
+            Text('修改地址或账号会清理此连接旧的本机会话位置、书签与模型偏好。密码留空会保留原密码。').fontSize(12).fontColor(C.secondary).width('100%')
+            Button('取消编辑').id('server-cancel-edit').height(32).buttonStyle(ButtonStyleMode.TEXTUAL).enabled(!this.store.serverSaving).onClick(() => { this.store.resetServerForm(); this.store.error = ''; this.store.serverNotice = ''; })
+          }
+          if (this.store.serverNotice) { Text(this.store.serverNotice).id('server-notice').fontSize(12).fontColor(C.secondary).width('100%') }
+          Button(this.store.serverSaving ? '正在保存…' : '保存并连接', { type: ButtonType.Capsule }).id('connect-button')
             .width('100%').height(46).borderRadius(11).backgroundColor(C.accent).fontColor(C.on_accent)
-            .enabled(!this.store.busy).onClick(() => { this.store.addServer().then(() => { if (this.store.connected) { this.store.pane = 'chat'; } }); })
+            .enabled(!this.store.busy && !this.store.serverSaving).onClick(() => { this.store.saveServer().then((saved: boolean) => { if (saved && this.store.connected) { this.store.pane = 'chat'; } }); })
         }.padding(18).backgroundColor(C.surface).borderRadius(16).width('100%')
         Text('支持 OpenCode V2 · 凭据存储在系统安全资产中').fontSize(11).fontColor(C.secondary).margin({ bottom: 22 })
       }.padding({ left: 20, right: 20 }).width('100%')
@@ -293,7 +333,7 @@ struct Index {
   @Builder
   messageCard(message: ChatMessage) {
     ConversationMessage({ message: message, thinking: reasoningInProgress(message), reasoningExpanded: this.reasoningExpanded(message),
-      onToggleReasoning: (): void => { this.toggleReasoning(message); },
+      onFork: (edit: boolean): void => { this.openFork(message, edit); }, onToggleReasoning: (): void => { this.toggleReasoning(message); },
       onTool: (tool: ToolItem): void => { this.follow = false; this.selectedTool = tool; this.sheetKind = 'tool'; this.toolSheetOpen = true; },
       onAttachment: (item: Attachment): void => { this.openAttachment(item); }, onOpenLink: (url: string): void => { this.openLink(url); }, onCopy: (text: string): void => { this.copy(text); } })
   }
@@ -340,6 +380,9 @@ struct Index {
           if (this.store.interactions.length) { Text('等待你处理').fontSize(11).fontColor(C.warning) }
           else if (this.store.working) { Text('正在运行').fontSize(11).fontColor(C.secondary) }
         }.padding({ left: 22, right: 22, bottom: 8 }).width('100%').constraintSize({ maxWidth: 860 })
+      }
+      if (this.store.parentSessionID) {
+        Row({ space: 8 }) { Text(this.store.branchBoundary ? '分叉会话 · ' + this.store.branchBoundary : '子会话').fontSize(11).fontColor(C.secondary).layoutWeight(1); Button('原会话').id('branch-parent').height(28).fontSize(11).buttonStyle(ButtonStyleMode.TEXTUAL).onClick(() => { this.store.openParentSession(); }) }.padding({ left: 22, right: 22, bottom: 6 }).width('100%').constraintSize({ maxWidth: 860 })
       }
       if (this.store.permissionError) {
         Row({ space: 8 }) {
@@ -412,7 +455,7 @@ struct Index {
               if (this.store.pendingSend) { Text('重试').fontSize(10).fontColor(C.on_accent) }
               else { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(18).fontColor([this.store.draft.trim() || this.store.attachments.length ? C.on_accent : C.muted]) }
             }.id('send-button').accessibilityText(this.store.pendingSend ? '重试发送' : '发送消息').width(36).padding(0).height(36).margin({ bottom: 3 })
-              .backgroundColor(this.store.draft.trim() || this.store.attachments.length || this.store.pendingSend ? C.accent : C.field).enabled(!this.store.busy && !this.store.agentBusy && !this.store.agentUncertain && !this.pickingAttachments && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.attachments.length || !!this.store.pendingSend))
+              .backgroundColor(this.store.draft.trim() || this.store.attachments.length || this.store.pendingSend ? C.accent : C.field).enabled(!this.store.busy && !this.store.agentBusy && !this.store.agentUncertain && !this.store.forkBusy && !this.store.compactionBusy && ['submitting', 'queued', 'running'].indexOf(this.store.compaction.state) < 0 && !this.pickingAttachments && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.attachments.length || !!this.store.pendingSend))
               .onClick(() => { this.follow = true; this.store.send(); })
           }
         }.alignItems(VerticalAlign.Bottom).padding({ left: 14, right: 8, top: 4, bottom: 4 }).width('100%')
@@ -538,6 +581,15 @@ struct Index {
   sheetContent() {
     if (this.sheetKind === 'tool') { this.toolDetails() }
     else if (this.sheetKind === 'agent') { AgentPicker({ agents: this.store.agents, current: this.store.agentID, busy: this.store.agentBusy, loading: this.store.agentLoading, error: this.store.agentError, blocked: this.store.agentUncertain ? '请先重新读取，确认当前 Agent。' : this.store.working || this.store.pendingSend || this.store.interactions.length || this.store.permissionError ? '请先结束当前任务并处理问题或审批。' : '', onSelect: (id: string): void => { this.selectAgent(id); }, onRefresh: (): void => { this.store.refreshAgentState(); } }) }
+    else if (this.sheetKind === 'fork') {
+      ForEach([this.forkScope + this.forkBefore + String(this.forkEditing)], (key: string) => {
+        ForkPanel({ editing: this.forkEditing, initialText: this.forkText, source: this.forkSource, hasFiles: this.forkHasFiles, busy: this.store.forkBusy, error: this.store.forkError, uncertain: this.store.forkUncertain,
+          blocked: this.store.working || !!this.store.pendingSend || !!this.store.interactions.length || !!this.store.permissionError, onCreate: (text: string, reuse: boolean): void => { this.createFork(text, reuse); }, onReview: (): void => { this.navigate('projects'); this.store.refreshSessions(); }, onChecked: (): void => { this.confirmForkReview(); } })
+      }, (key: string) => key)
+    }
+    else if (this.sheetKind === 'usage') { UsagePanel({ usage: this.store.usage, model: this.store.models.find((model: ModelItem) => model.id === this.store.modelID)?.label || this.store.modelID,
+      contextLimit: this.store.models.find((model: ModelItem) => model.id === this.store.modelID)?.contextLimit ?? -1, loading: this.store.usageLoading, busy: this.store.compactionBusy, compact: this.store.compaction, error: this.store.usageError,
+      blocked: this.store.working || !!this.store.pendingSend || !!this.store.interactions.length || !!this.store.permissionError || this.store.forkBusy || this.store.agentBusy, onRefresh: (): void => { this.store.refreshUsage(); }, onCompact: (): void => { this.confirmCompaction(); } }) }
     else if (this.sheetKind === 'export') { ExportPanel({ busy: this.store.exporting, saving: this.savingExport, count: this.store.exportCount, error: this.store.exportError, notice: this.exportNotice, onExport: (format: string, tools: boolean): void => { this.exportConversation(format, tools); }, onCancel: (): void => { this.store.cancelExport(); } }) }
     else if (this.sheetKind === 'model') { ModelPicker({ models: this.store.models, current: this.store.modelID, busy: this.switchingModel, error: this.store.error, onSelect: (id: string): void => { this.selectModel(id); }, onManage: (): void => { this.toolSheetOpen = false; this.navigate('settings'); } }) }
     else if (this.sheetKind === 'attachment') { AttachmentPreview({ item: this.selectedAttachment, saving: this.savingAttachment, onSave: (item: Attachment): void => { this.saveAttachment(item); }, onCopy: (text: string): void => { this.copy(text); } }) }
@@ -551,6 +603,8 @@ struct Index {
         Button('模型与接入').enabled(!!this.store.connected).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('settings'); })
         Button('服务器连接').width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('connections'); })
         Button('外观').width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.navigate('appearance'); })
+        Button('上下文与用量').id('open-usage').enabled(!!this.store.sessionID).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.sheetKind = 'usage'; this.store.refreshUsage(); })
+        Button('分叉当前会话').id('open-fork').enabled(!!this.store.sessionID && !this.store.forkBusy).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.openFork(); })
         Button('导出当前会话').id('open-export').enabled(!!this.store.sessionID && !this.savingExport).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.store.exportError = ''; this.exportNotice = ''; this.sheetKind = 'export'; })
         Button('同步当前对话').enabled(!!this.store.sessionID).width('100%').buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.text).onClick(() => { this.toolSheetOpen = false; this.store.sync(); })
       }.padding({ left: 20, right: 20, top: 24, bottom: 20 }).width('100%')
@@ -577,7 +631,7 @@ struct Index {
   sessionRow(session: SessionItem, compact: boolean) {
     Row({ space: 4 }) {
       Column({ space: 4 }) {
-        Text((this.store.isPinned(session.id) ? '置顶 · ' : '') + session.title).fontSize(compact ? 13 : 16).fontColor(C.text).maxLines(2).width('100%')
+        Text((this.store.isPinned(session.id) ? '置顶 · ' : '') + (session.forkType ? '分支 · ' : session.parentID ? '子会话 · ' : '') + session.title).fontSize(compact ? 13 : 16).fontColor(C.text).maxLines(2).width('100%')
         if (this.store.sessionLabel(session.id)) { Text(this.store.sessionLabel(session.id)).fontSize(11).fontColor(C.warning).width('100%') }
       }.id((compact ? 'sidebar-session-' : 'session-') + session.id).alignItems(HorizontalAlign.Start).layoutWeight(1).padding(10).onClick(() => { this.pickSession(session); })
       Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.ellipsis_circle')).fontSize(18).fontColor([C.secondary]) }
@@ -723,6 +777,6 @@ struct Index {
       .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { this.sidebarOpen = show; })
       .width('100%').height('100%').backgroundColor(C.page).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .onAreaChange((oldArea: Area, newArea: Area) => { this.viewportWidth = Number(newArea.width); const wide = this.viewportWidth >= 840; if (this.wide !== wide) { this.wide = wide; this.sidebarOpen = wide; } })
-      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' || this.sheetKind === 'attachment' || this.sheetKind === 'model' || this.sheetKind === 'agent' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true, onDisappear: (): void => { if (this.store.exporting) { this.store.cancelExport(); } } })
+      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' || this.sheetKind === 'attachment' || this.sheetKind === 'model' || this.sheetKind === 'agent' || this.sheetKind === 'fork' || this.sheetKind === 'usage' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true, onDisappear: (): void => { if (this.store.exporting) { this.store.cancelExport(); } } })
   }
 }

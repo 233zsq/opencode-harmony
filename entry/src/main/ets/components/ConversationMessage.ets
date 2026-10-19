@@ -9,6 +9,7 @@ export struct ConversationMessage {
   @Prop message: ChatMessage = { id: '', role: '', text: '', reasoning: '', tools: [], parts: [], state: 'completed' };
   @Prop thinking: boolean = false;
   @Prop reasoningExpanded: boolean = false;
+  onFork: (edit: boolean) => void = (): void => {};
   onCopy: (text: string) => void = (): void => {};
   onToggleReasoning: () => void = (): void => {};
   onTool: (tool: ToolItem) => void = (tool: ToolItem): void => {};
@@ -38,6 +39,7 @@ export struct ConversationMessage {
       Column({ space: 8 }) {
         if (this.message.text) { Row() {
         Blank().layoutWeight(1)
+        Button('编辑').id('edit-fork-' + this.message.id).accessibilityText('编辑这条消息并分叉').buttonStyle(ButtonStyleMode.TEXTUAL).height(28).width(28).padding(0).fontSize(11).fontColor(C.muted).margin({ right: 4 }).onClick(() => { this.onFork(true); })
         Text(this.message.text).id('message-user-' + this.message.id).fontSize(15).lineHeight(25).fontColor(C.text)
           .padding({ left: 18, right: 18, top: 12, bottom: 12 }).backgroundColor(C.bubble).borderRadius(20)
           .constraintSize({ maxWidth: '88%' }).copyOption(CopyOptions.InApp)
@@ -85,7 +87,12 @@ export struct ConversationMessage {
             }, (tool: ToolItem) => tool.id + tool.status + tool.input)
           }.width('100%').border({ width: 1, color: C.separator }).borderRadius(10)
         }
-        if (this.message.text && !this.message.tools.length) { Button('复制回复').id('copy-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(24).padding({ left: 0, right: 8 }).fontSize(11).fontColor(C.muted).onClick(() => { this.onCopy(this.message.text); }) }
+        if (this.message.text || this.message.tools.length) {
+          Row({ space: 10 }) {
+            if (this.message.text) { Button('复制回复').id('copy-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(24).padding({ left: 0, right: 8 }).fontSize(11).fontColor(C.muted).onClick(() => { this.onCopy(this.message.text); }) }
+            Button('分叉').id('fork-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(24).fontSize(11).fontColor(C.muted).onClick(() => { this.onFork(false); })
+          }.width('100%')
+        }
         if (!this.message.text && !this.message.reasoning && !this.message.tools.length) {
           Text('正在等待回复…').fontSize(13).fontColor(C.muted)
         }

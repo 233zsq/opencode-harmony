@@ -1,3 +1,4 @@
+import { SessionUsage, usageValue, CompactRecord } from '../domain/SessionUsage';
 import { AgentItem, selectableAgents } from '../domain/Agents';
 import { ExportPage } from '../domain/TranscriptExport';
 import { Attachment, historyAttachment } from '../domain/Attachments';
@@ -41,6 +42,8 @@ export function parseFields(value: Object | undefined): FormField[] {
 
 interface HistoryCursor { next: string; }
 interface HistoryPage { data: Object[]; cursor: HistoryCursor; }
+interface ForkRequest { before?: string; }
+interface CompactRequest { id: string; delivery: string; }
 interface RenameSessionRequest { title: string; }
 interface ApprovalPatchInput { file: string; patch: string; }
 
@@ -84,6 +87,16 @@ export function networkError(error: Error): Error {
   }
   return error;
 }
+export function parseUsage(detail: Json): SessionUsage {
+    const tokens = object(detail['tokens']); const cache = object(tokens['cache']);
+    return { input: usageValue(tokens['input']), output: usageValue(tokens['output']), reasoning: usageValue(tokens['reasoning']), cacheRead: usageValue(cache['read']), cacheWrite: usageValue(cache['write']), cost: usageValue(detail['cost']) };
+  }
+
+export function parseCompactRecord(value: Object): CompactRecord {
+    const message = object(value); const state = string(message['status']);
+    return { id: string(message['id']), state: ['running', 'completed', 'failed'].indexOf(state) >= 0 ? state : 'unknown', error: state === 'failed' ? string(object(message['error'])['message'], '服务器压缩失败，请检查模型与上下文').slice(0, 500) : '' };
+  }
+
 export class Protocol {
   private compactHistory: Set<string> = new Set<string>();
   private auth: string;
@@ -141,7 +154,7 @@ export class Protocol {
     const s = object(value); const location = object(s['location']); const model = object(s['model']);
     return { id: string(s['id']), title: string(s['title'], '未命名会话'), directory: string(location['directory'], directory),
       status: 'idle', model: model['id'] ? string(model['providerID']) + '/' + string(model['id']) : '',
-      agent: string(s['agent']), updated: Number(object(s['time'])['updated']) || 0, archived: !!object(s['time'])['archived'] };
+      agent: string(s['agent']), parentID: string(object(s['fork'])['sessionID'], string(s['parentID'])), forkType: string(object(object(s['fork'])['boundary'])['type']), forkBefore: string(object(object(s['fork'])['boundary'])['messageID']), updated: Number(object(s['time'])['updated']) || 0, archived: !!object(s['time'])['archived'] };
   }
   async session(id: string): Promise<SessionItem> {
     const session = this.parseSession(object(await this.request('/api/session/' + encodeURIComponent(id)))['data']);
@@ -170,8 +183,25 @@ export class Protocol {
   async models(directory: string): Promise<ModelItem[]> {
     return rows(await this.request('/api/model?' + this.scope(directory))).map((v: Object): ModelItem => {
       const m = object(v);
-      return { id: string(m['providerID']) + '/' + string(m['modelID']), label: string(m['name'], string(m['modelID'])), input: list(object(m['capabilities'])['input']).map((v: Object) => string(v)) };
+      return { id: string(m['providerID']) + '/' + string(m['modelID']), label: string(m['name'], string(m['modelID'])), input: list(object(m['capabilities'])['input']).map((v: Object) => string(v)), contextLimit: usageValue(object(m['limit'])['context']) };
     }).filter((m: ModelItem) => !m.id.endsWith('/'));
+  }
+  async fork(id: string, before: string): Promise<SessionItem> {
+    const result = await this.request('/api/session/' + encodeURIComponent(id) + '/fork', http.RequestMethod.POST, { before: before || undefined } as ForkRequest);
+    const child = this.parseSession(object(result)['data']);
+    if (!child.id || child.id === id || child.parentID !== id || (before ? child.forkType !== 'before' || child.forkBefore !== before : child.forkType !== 'through')) { throw new Error('分叉结果未能确认，请检查会话列表'); } return child;
+  }
+  async compact(id: string, requestID: string): Promise<void> {
+    const result = object(object(await this.request('/api/session/' + encodeURIComponent(id) + '/compact', http.RequestMethod.POST, { id: requestID, delivery: 'queue' } as CompactRequest))['data']);
+    if (result['id'] !== requestID || result['sessionID'] !== id || result['type'] !== 'compaction') { throw new Error('压缩提交结果待核对'); }
+  }
+  async compactionStatus(id: string, requestID: string): Promise<CompactRecord> {
+    try {
+      const message = object(object(await this.request('/api/session/' + encodeURIComponent(id) + '/message/' + encodeURIComponent(requestID)))['data']);
+      if (message['id'] !== requestID || message['type'] !== 'compaction') { throw new Error('压缩记录与请求不一致'); } return parseCompactRecord(message);
+    } catch (e) { if (!(e instanceof ApiError) || e.code !== 404) { throw e as Error; } }
+    const inbox = rows(await this.request('/api/session/' + encodeURIComponent(id) + '/inbox'));
+    return { id: requestID, state: inbox.some((item: Object) => object(item)['id'] === requestID && object(item)['type'] === 'compaction') ? 'queued' : 'unknown', error: '' };
   }
   async agents(directory: string): Promise<AgentItem[]> {
     return selectableAgents(rows(await this.request('/api/agent?' + this.scope(directory))).map((value: Object): AgentItem => {
@@ -240,7 +270,7 @@ export class Protocol {
       });
       const failure = object(m['error']);
       const text = role === 'user' ? string(m['text'], string(object(m['payload'])['text'])) :
-        parts.filter((p: TextPart) => p.type === 'text').map((p: TextPart) => p.text).join('\n') || (role === 'assistant' ? (failure['message'] ? '模型调用失败：' + string(failure['message']).slice(0, 500) : '') : role === 'model-switched' ? '会话模型已切换' : role === 'agent-switched' ? 'Agent 已切换' : role === 'location-switched' ? '工作目录已切换' : '会话状态已更新');
+        parts.filter((p: TextPart) => p.type === 'text').map((p: TextPart) => p.text).join('\n') || (role === 'assistant' ? (failure['message'] ? '模型调用失败：' + string(failure['message']).slice(0, 500) : '') : role === 'compaction' ? (m['status'] === 'completed' ? '上下文压缩已完成' : m['status'] === 'failed' ? '上下文压缩失败' : '正在压缩上下文') : role === 'model-switched' ? '会话模型已切换' : role === 'agent-switched' ? 'Agent 已切换' : role === 'location-switched' ? '工作目录已切换' : '会话状态已更新');
       return { id: string(m['id']), role: role, text: text,
         reasoning: parts.filter((p: TextPart) => p.type === 'reasoning').map((p: TextPart) => p.text).join('\n'),
         files: list(m['files']).slice(0, 4).map((v: Object, index: number): Attachment => { const file = object(v); return historyAttachment(string(m['id']) + '-file-' + index, string(file['name']), string(file['mime']), string(file['data'])); }),

@@ -8,13 +8,14 @@
 
 - 对话首页、原生导航与系统菜单、手机抽屉与Pad宽屏侧栏；历史搜索、独立管理页面及最近服务器恢复。
 - API26 原生沉浸光感、系统分段控件及跟随系统/浅色/深色外观；最低兼容 API24。
-- 多服务器配置、HTTP Basic 认证、连接与错误状态。
+- 多服务器配置与编辑、密码保留/更新/清除、重复地址检查及移除确认；HTTP Basic 认证、连接与错误状态。
 - 项目/目录、创建和恢复会话、历史分页；会话改名、本机置顶/归档及服务器名称搜索。
 - 原生照片/文件选择、附件草稿与压缩、图片/文本预览及保存；按模型能力检查图片和 PDF 输入。
 - SSE 流式正文，思考结束自动收起、工具摘要点击查看详情；原生 Markdown、代码块、表格和可点击 HTTPS 链接。
 - V2 Question/Form：单选、多选、文本、条件字段、默认值与类型校验。
 - 审批前查看命令、目录、操作范围及请求自带 Diff；批准前重新核对，支持单次批准/拒绝及失败恢复。
 - 会话 Agent 搜索与切换、说明及默认模型展示；切换结果读回确认与重复提交保护。
+- 消息分叉、编辑重发草稿、可选原附件与父会话返回；上下文上限、服务端 Token/费用及手动压缩状态核对。
 - 完整历史导出 Markdown/文本、可选工具详情与原生文件保存；长会话进度、取消及失败处理。
 - 动态模型目录、聊天页模型搜索与分批选择、渠道/ID和图片/PDF能力展示，以及每个服务器的模型偏好。
 - 手机端提供商搜索、API Key、OAuth 设备码/授权码和多账号管理；受限自定义兼容渠道。
@@ -22,7 +23,7 @@
 - 退避重连、回前台同步、消息 ID 去重与迟到响应隔离；发送结果核对、草稿及 Question 答案在本次运行中暂存。
 - 跨项目待办中心、侧栏运行/待回答/待审批状态；消息/代码复制及原生多行输入。
 
-已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 185 项本机回归、4 项合成负载检查及完整构建，最新交互按使用者要求只在 API26 模拟器验收；真机留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 214 项本机回归、4 项合成负载检查及完整构建，最新交互按使用者要求只在 API26 模拟器验收；真机留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
 独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
@@ -54,6 +55,7 @@
 
     node tests/core.test.mjs
     node tests/state.test.mjs
+    node tests/workspace-controls.test.mjs
     node tests/agent-export.test.mjs
     node tests/model-selection.test.mjs
     node tests/attachments.test.mjs

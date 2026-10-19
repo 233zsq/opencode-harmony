@@ -58,7 +58,10 @@ const modules=new Map([
 ]);
 function load(path,key){const exports={};const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true}}).outputText;
  vm.runInNewContext(code,{exports,require:name=>{assert.ok(modules.has(name),name);return modules.get(name);},Observed:value=>value,Error,Map,Set,Date,Math,JSON,setTimeout,clearTimeout,setInterval,clearInterval});modules.set(key,exports);return exports;}
-load('entry/src/main/ets/domain/Attachments.ts','../domain/Attachments');load('entry/src/main/ets/domain/Core.ts','../domain/Core');load('entry/src/main/ets/data/DedicatedTrust.ets','./DedicatedTrust');
+load('entry/src/main/ets/domain/Attachments.ts','../domain/Attachments');load('entry/src/main/ets/domain/Core.ts','../domain/Core');
+modules.set('./Core', modules.get('../domain/Core'));
+load('entry/src/main/ets/domain/Connections.ts', '../domain/Connections');
+load('entry/src/main/ets/domain/SessionUsage.ts', '../domain/SessionUsage');load('entry/src/main/ets/data/DedicatedTrust.ets','./DedicatedTrust');
 load('entry/src/main/ets/domain/Agents.ts', '../domain/Agents');
 load('entry/src/main/ets/domain/TranscriptExport.ts', '../domain/TranscriptExport');
 const {Protocol}=load('entry/src/main/ets/data/Protocol.ets','../data/Protocol');load('entry/src/main/ets/presentation/ProviderStore.ets','./ProviderStore');

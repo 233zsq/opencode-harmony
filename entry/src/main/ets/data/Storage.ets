@@ -43,6 +43,10 @@ export class Storage {
     try { await this.prefs.put('sessionPreferences.' + serverID, JSON.stringify(flags)); await this.prefs.flush(); }
     catch (e) { throw e as Error; }
   }
+  async resetServerPosition(id: string): Promise<void> {
+    if (!this.prefs) { throw new Error('本机设置尚未就绪'); }
+    try { await this.prefs.put('position.' + id, '[]'); await this.prefs.put('sessionPreferences.' + id, '[]'); await this.prefs.flush(); } catch (e) { throw e as Error; }
+  }
   private query(id: string): asset.AssetMap {
     try {
       const q: asset.AssetMap = new Map<asset.Tag, asset.Value>();
