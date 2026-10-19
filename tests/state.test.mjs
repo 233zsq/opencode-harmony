@@ -516,4 +516,21 @@ await test('authentication errors do not retry as compact history reads',async()
 await test('unknown send is confirmed by exact message lookup when it falls outside the current history page',async()=>{
  const store=new AppStore();store.sessionID='s';store.pendingSend={id:'accepted',sessionID:'s',text:'task'};store.draft='task';store.error='socket closed。发送结果待核对，重试将使用同一消息 ID';store.api={messages:async()=>({data:[]}),parseMessages:()=>[],interactions:async()=>[],request:async path=>path.endsWith('/message/accepted')?{data:{id:'accepted',type:'user'}}:path.endsWith('/inbox')?{data:[]}:{data:{}}};await store.sync();assert.equal(store.pendingSend,undefined);assert.equal(store.draft,'');assert.equal(store.error,'');
 });
+await test('provider selection with identical method IDs resolves the new provider and clears the previous key',async()=>{
+ const store=new ProviderStore();const method={id:'key',type:'key',supported:true,fields:[]};
+ const writes=[];store.attach(settingsApi((p,m,b)=>{if(m==='POST')writes.push({p,b});}),'/repo',async()=>{});
+ store.entries=[{id:'deepseek',name:'DeepSeek',methods:[method],accounts:[]},{id:'xiaomi',name:'Xiaomi',methods:[method],accounts:[]}];
+ store.select(store.entries[0]);store.choose(method);store.key='fixture-old-key';store.select(store.entries[1]);assert.equal(store.current().name,'Xiaomi');assert.equal(store.key,'');assert.equal(store.methodType,'');
+ store.choose(method);store.key='fixture-new-key';await store.connect();assert.equal(writes[0].p,'/api/integration/xiaomi/connect/key?location=%2Frepo');
+});
+await test('credential submission freezes key and account label before asynchronous idle checks',async()=>{
+ let release,signal;const gate=new Promise(r=>signal=r);const writes=[];const store=new ProviderStore();
+ store.attach(settingsApi((p,m,b)=>{if(p==='/api/session/active'){signal();return new Promise(r=>release=r);}if(m==='POST')writes.push(b);}),'/repo',async()=>{});
+ store.selected='xiaomi';store.choose({id:'key',type:'key',supported:true,fields:[]});store.key='fixture-original';store.label='Original';const save=store.connect();await gate;store.key='fixture-later';store.label='Later';release({data:{}});await save;
+ assert.equal(writes[0].key,'fixture-original');assert.equal(writes[0].label,'Original');
+});
+await test('a successful model switch clears previous errors while a rejected switch retains the current model',async()=>{
+ const store=new AppStore();store.sessionID='s';store.active=false;store.modelID='p/old';store.error='Old error';store.api={request:async()=>({})};await store.chooseModel('p/new');assert.equal(store.modelID,'p/new');assert.equal(store.error,'');
+ store.api.request=async()=>{throw new protocol.ApiError(400,'Unsupported model');};await store.chooseModel('p/bad');assert.equal(store.modelID,'p/new');assert.match(store.error,/Unsupported/);
+});
 console.log(count + ' adapter/state tests passed.');

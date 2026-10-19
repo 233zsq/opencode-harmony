@@ -10,7 +10,14 @@ const forms = [];
 const permissions = [];
 const receipts = [];
 const prompts = new Map();
+const integrations = [
+  {id:'opencode',name:'OpenCode',methods:[{id:'key',type:'key',label:'API Key'}],connections:[]},
+  {id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',label:'API Key'},{type:'env',label:'服务器环境变量'}],connections:[]},
+  {id:'xiaomi',name:'Xiaomi',methods:[{id:'key',type:'key',label:'API Key'}],connections:[]},
+  {id:'xiaomi-token-plan-cn',name:'Xiaomi Token Plan (China)',methods:[{id:'key',type:'key',label:'API Key'}],connections:[]}
+];
 let permissionReadFailure = false;
+let modelFailure = false;
 let uiMessageID = '';
 let active = false;
 let sequence = 0;
@@ -97,6 +104,7 @@ const server = http.createServer(async (req, res) => {
       {id:'steer_b',type:'user',text:'追加说明仍属第二轮'}, {id:'idle_b',type:'idle',outcome:'succeeded'});
     return send(res,{ready:true});
   }
+  if (path === '/__test/model-failure' && req.method === 'POST') { modelFailure = url.searchParams.get('enabled') === '1';return send(res,{modelFailure}); }
   if (path === '/__test/state') return send(res, { receipts, messages: messages.length, forms, permissions, streams: streams.size });
   if (path === '/__test/disconnect') {
     for (const stream of streams) stream.end();
@@ -122,7 +130,8 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/session/active') return send(res, { data: active ? { [session.id]: { type: 'running' } } : {} });
   if (path === '/api/model') return send(res, { location: { directory }, data: [
     { id: 'fixture/fixture-coder', modelID: 'fixture-coder', providerID: 'fixture', name: '本机测试模型', enabled: true, status: 'active' },
-    { id: 'fixture/fixture-second', modelID: 'fixture-second', providerID: 'fixture', name: '模型切换测试', enabled: true, status: 'active' }
+    { id: 'fixture/fixture-second', modelID: 'fixture-second', providerID: 'fixture', name: '模型切换测试', enabled: true, status: 'active' },
+    ...Array.from({length:75},(_,i)=>({modelID:'model-'+String(i).padStart(3,'0'),providerID:'fixture-extra',name:'测试模型'+String(i).padStart(3,'0'),enabled:true,capabilities:{input:i%2===0?['text','image']:['text','pdf']}}))
   ] });
   if (path.endsWith('/message')) return send(res, { data: [...messages].reverse().slice(0, 30), cursor: {} });
   if (path.endsWith('/inbox')) return send(res, { data: [] });
@@ -134,7 +143,7 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, { data: { ...prompts.get(input.id), sessionID: session.id, type: 'user', payload: { text: input.text } } });
   }
-  if (path.endsWith('/model')) { model = input.model; session.model = model; return send(res, {}, 204); }
+  if (path.endsWith('/model')) { if(modelFailure)return send(res,{error:'Controlled model rejection'},400);model = input.model; session.model = model; return send(res, {}, 204); }
   if (path.endsWith('/interrupt')) { active = false; return send(res, { interrupted: true }); }
   if (path.endsWith('/form')) return send(res, { data: forms });
   if (path.endsWith('/permission')) return permissionReadFailure ? send(res, { error: 'Controlled approval read failure' }, 400) : send(res, { data: permissions });
@@ -152,7 +161,9 @@ const server = http.createServer(async (req, res) => {
     return send(res, {}, 204);
   }
   if (path === '/api/session/'+session.id+'/diff') return send(res,{data:[{file:'src/example.ets',patch:'--- a/src/example.ets\n+++ b/src/example.ets\n@@ -1 +1 @@\n-before\n+'+(url.searchParams.get('from')==='turn_a'?'TASK_A_ONLY':'TASK_B_ONLY')+'\n'}]});
-  if (path === '/api/integration') return send(res,{data:[{id:'opencode',name:'OpenCode',methods:[{id:'key',type:'key',label:'API Key'}],connections:[]},{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',label:'API Key'}],connections:[]}]});
+  if (path === '/api/integration') return send(res,{data:integrations});
+  const credentialPath = path.match(/^\/api\/integration\/([^/]+)\/connect\/key$/);
+  if (credentialPath && req.method === 'POST') { const item=integrations.find(p=>p.id===credentialPath[1]);if(!item)return send(res,{},404);item.connections.unshift({type:'credential',id:'fixture_'+randomUUID(),label:input.label||'Fixture account',method:'key'});return send(res,{},204); }
   if (path === '/client-settings/providers') return send(res,{data:[]});
   if (path === '/api/vcs/diff') return send(res, { location: { directory }, data: [{
     file: 'src/example.ets', patch: 'diff --git a/src/example.ets b/src/example.ets\n--- a/src/example.ets\n+++ b/src/example.ets\n@@ -1,2 +1,2 @@\n-const platform = "Android";\n+const platform = "HarmonyOS";\n // local fixture\n', additions: 1, deletions: 1, status: 'modified'

@@ -168,15 +168,16 @@ export class ProviderStore {
     catch (e) { this.error = (e as Error).message; return; }
     const generation = this.generation; const api = this.api; const methodType = this.methodType; const directory = this.directory;
     const connectPath = this.path('/connect/' + methodType);
+    const key = this.key.trim(); const label = this.label.trim(); const methodID = this.methodID;
     this.busy = true; this.error = ''; this.notice = '';
     try {
       await this.idle(); if (generation !== this.generation) { return; }
-      if (this.methodType === 'key') {
+      if (methodType === 'key') {
         await api.request(connectPath, http.RequestMethod.POST,
-          { key: this.key.trim(), answer: answer, label: this.label.trim() } as KeyRequest);
+          { key: key, answer: answer, label: label } as KeyRequest);
       } else {
         const result = await api.request(connectPath, http.RequestMethod.POST,
-          { methodID: this.methodID, answer: answer, label: this.label.trim() } as MethodRequest);
+          { methodID: methodID, answer: answer, label: label } as MethodRequest);
         if (generation !== this.generation) {
           if (methodType === 'oauth') {
             const attempt = string(object(object(result)['data'])['attemptID']);

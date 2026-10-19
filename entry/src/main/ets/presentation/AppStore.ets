@@ -636,7 +636,7 @@ export class AppStore {
   }
   async chooseModel(id: string): Promise<void> {
     if (!this.api || !this.sessionID) { return; }
-    const slash = id.indexOf('/'); const generation = this.generation;
+    const slash = id.indexOf('/'); const generation = this.generation; this.error = '';
     try {
       await this.api.request(this.sessionPath() + '/model', http.RequestMethod.POST,
         { model: { id: id.slice(slash + 1), providerID: id.slice(0, slash) } } as ModelRequest);

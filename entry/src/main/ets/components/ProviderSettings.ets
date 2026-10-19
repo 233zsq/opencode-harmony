@@ -8,8 +8,6 @@ import { FormFieldsView } from './FormFieldsView';
 export struct ProviderSettings {
   @ObjectLink store: ProviderStore;
   onOpenLink: (url: string) => void = (): void => {};
-  @Builder
-  cardTitle(title: string) { Text(title).fontSize(18).fontWeight(FontWeight.Bold).fontColor(C.text).width('100%') }
   build() {
     Scroll() {
       Column({ space: 14 }) {
@@ -45,10 +43,10 @@ export struct ProviderSettings {
             .backgroundColor(this.store.selected === entry.id ? C.accent_soft : C.surface).borderRadius(12)
             .onClick(() => { if (!this.store.busy) { this.store.select(entry); } })
         }, (entry: Integration) => entry.id + entry.name + entry.accounts.length)
-        if (this.store.current()) {
+        ForEach(this.store.selected ? this.store.entries.filter((item: Integration) => item.id === this.store.selected) : [], (entry: Integration) => {
           Column({ space: 12 }) {
-            this.cardTitle(this.store.current()?.name || '提供商')
-            ForEach(this.store.current()?.accounts || [], (account: Account) => {
+            Text(entry.name).id('provider-auth-title').fontSize(18).fontWeight(FontWeight.Bold).fontColor(C.text).width('100%')
+            ForEach(entry.accounts, (account: Account) => {
               Column({ space: 6 }) {
                 Text(account.label + (account.active ? ' · 当前使用' : '')).fontSize(14).fontColor(C.text).width('100%')
                 if (account.type === 'credential') {
@@ -64,9 +62,9 @@ export struct ProviderSettings {
                 } else { Text('环境变量由服务器管理').fontSize(11).fontColor(C.secondary) }
               }.padding(10).backgroundColor(C.field).borderRadius(8).width('100%')
             }, (account: Account) => account.id + account.label + account.type + account.method + String(account.active))
-            TextInput({ placeholder: '账号名称（可选，也用于改名）', text: this.store.label }).id('provider-label')
+            TextInput({ placeholder: '账号名称（可选，也用于改名）', text: this.store.label }).id('provider-label').enabled(!this.store.busy)
               .fontSize(13).backgroundColor(C.field).onChange((value: string) => { this.store.label = value; })
-            ForEach(this.store.current()?.methods || [], (method: AuthMethod) => {
+            ForEach(entry.methods, (method: AuthMethod) => {
               Button(method.label + (method.supported ? '' : method.id === 'chatgpt-browser' ? '（请选择设备码授权）' : '（服务器配置）'), { type: ButtonType.Capsule })
                 .id('auth-method-' + method.id).fontSize(12).width('100%').backgroundColor(this.store.methodID === method.id ? C.accent_soft : C.field)
                 .fontColor(C.text).enabled(method.supported && !this.store.busy && !this.store.attemptID)
@@ -74,12 +72,13 @@ export struct ProviderSettings {
             }, (method: AuthMethod) => method.id)
             if (this.store.methodType && !this.store.attemptID) {
               if (this.store.methodType === 'key') {
-                TextInput({ placeholder: 'API Key（仅提交到当前服务器）', text: this.store.key }).id('provider-key').type(InputType.Password)
+                TextInput({ placeholder: 'API Key（仅提交到当前服务器）', text: this.store.key }).id('provider-key').enabled(!this.store.busy).type(InputType.Password)
                   .fontSize(13).onChange((value: string) => { this.store.key = value; })
               }
               FormFieldsView({ fields: this.store.fields,
                 onChange: (key: string, value: string, multiple: boolean): void => { this.store.field(key, value, multiple); },
-                onOpenLink: (url: string): void => { this.onOpenLink(url); } })
+                onOpenLink: (url: string): void => { this.onOpenLink(url); } }).enabled(!this.store.busy)
+              Text('保存到 ' + entry.name).id('provider-save-target').fontSize(11).fontColor(C.secondary).width('100%')
               Button(this.store.busy ? '提交中…' : this.store.methodType === 'oauth' ? '开始授权' : '保存连接', { type: ButtonType.Capsule })
                 .id('provider-connect').width('100%').backgroundColor(C.accent).fontColor(C.on_accent).enabled(!this.store.busy)
                 .onClick(() => { this.store.connect(); })
@@ -98,8 +97,8 @@ export struct ProviderSettings {
                 Button('取消授权', { type: ButtonType.Capsule }).onClick(() => { this.store.cancel(); })
               }
             }
-          }.padding(16).width('100%').backgroundColor(C.surface).borderRadius(14)
-        }
+          }.id('provider-auth-' + entry.id).padding(16).width('100%').backgroundColor(C.surface).borderRadius(14)
+        }, (entry: Integration) => JSON.stringify([entry.id, entry.name, entry.accounts, entry.methods]))
         }
         if (this.store.section === 'custom') {
         Column({ space: 12 }) {

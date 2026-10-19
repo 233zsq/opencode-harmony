@@ -1,3 +1,4 @@
+import { ModelPicker } from '../components/ModelPicker';
 import { DiffContent } from '../components/DiffContent';
 import { Attachment, attachmentProblem } from '../domain/Attachments';
 import { AttachmentPicker } from '../data/AttachmentPicker';
@@ -24,6 +25,14 @@ struct Index {
   @State @Watch('storeChanged') store: AppStore = new AppStore();
   @StorageLink('appForeground') @Watch('foregroundChanged') foreground: boolean = true;
   @State follow: boolean = true;
+  @State switchingModel: boolean = false;
+  private async selectModel(id: string): Promise<void> {
+    if (this.switchingModel || !this.store.sessionID) { return; }
+    if (id === this.store.modelID) { this.toolSheetOpen = false; return; }
+    const scope = this.store.connected + '/' + this.store.sessionID; this.switchingModel = true;
+    try { await this.store.chooseModel(id); if (scope === this.store.connected + '/' + this.store.sessionID && this.store.modelID === id && !this.store.error) { this.toolSheetOpen = false; } }
+    finally { this.switchingModel = false; }
+  }
   @State savingAttachment: boolean = false;
   private toast(message: string): void { try { this.getUIContext().getPromptAction().showToast({ message: message }); } catch (_) {} }
   private async saveAttachment(item: Attachment): Promise<void> {
@@ -89,7 +98,7 @@ struct Index {
   private storeChanged(): void {
     this.syncNavigation();
     const session = this.store.connected + '/' + this.store.sessionID;
-    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment') { this.toolSheetOpen = false; } this.follow = true; }
+    if (session !== this.viewSession) { this.viewSession = session; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment' || this.sheetKind === 'model') { this.toolSheetOpen = false; } this.follow = true; }
     if (this.viewMessages === this.store.messages && this.viewInteractions === this.store.interactions) { return; }
     this.viewMessages = this.store.messages; this.viewInteractions = this.store.interactions;
     const active = this.store.messages.filter((m: ChatMessage) => reasoningInProgress(m)).map((m: ChatMessage) => m.id);
@@ -501,6 +510,7 @@ struct Index {
   @Builder
   sheetContent() {
     if (this.sheetKind === 'tool') { this.toolDetails() }
+    else if (this.sheetKind === 'model') { ModelPicker({ models: this.store.models, current: this.store.modelID, busy: this.switchingModel, error: this.store.error, onSelect: (id: string): void => { this.selectModel(id); }, onManage: (): void => { this.toolSheetOpen = false; this.navigate('settings'); } }) }
     else if (this.sheetKind === 'attachment') { AttachmentPreview({ item: this.selectedAttachment, saving: this.savingAttachment, onSave: (item: Attachment): void => { this.saveAttachment(item); }, onCopy: (text: string): void => { this.copy(text); } }) }
     else if (this.sheetKind === 'session') { this.sessionActions() }
     else {
@@ -628,10 +638,11 @@ struct Index {
     Row({ space: 8 }) {
       Blank().width(this.sidebarOpen ? 0 : 56).height(40)
       if (this.store.models.length) {
-        Select(this.store.models.map((model: ModelItem): SelectOption => ({ value: model.label }))).id('model-select')
-          .value(this.store.models.find((model: ModelItem) => model.id === this.store.modelID)?.label || '选择模型')
-          .font({ size: 13 }).fontColor(C.text).height(36).width(Math.min(240, Math.max(100, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))))
-          .enabled(!!this.store.sessionID).onSelect((index: number) => { this.store.chooseModel(this.store.models[index].id); })
+        Button(this.store.models.find((model: ModelItem) => model.id === this.store.modelID)?.label || '选择模型', { type: ButtonType.Capsule }).id('model-select')
+          .fontSize(13).fontColor(C.text).backgroundColor(C.field).height(36).labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
+          .width(Math.min(240, Math.max(100, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))))
+          .enabled(!!this.store.sessionID && !this.store.busy).accessibilityText('选择对话模型')
+          .onClick(() => { this.store.error = ''; this.sheetKind = 'model'; this.toolSheetOpen = true; })
       } else { Text('OpenCode').fontSize(20).fontWeight(FontWeight.Medium).fontColor(C.text).layoutWeight(1) }
       Blank().layoutWeight(1)
     }.width(Math.max(180, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - 104)).height(56)
@@ -682,6 +693,6 @@ struct Index {
       .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { this.sidebarOpen = show; })
       .width('100%').height('100%').backgroundColor(C.page).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .onAreaChange((oldArea: Area, newArea: Area) => { this.viewportWidth = Number(newArea.width); const wide = this.viewportWidth >= 840; if (this.wide !== wide) { this.wide = wide; this.sidebarOpen = wide; } })
-      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' || this.sheetKind === 'attachment' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true })
+      .bindSheet($$this.toolSheetOpen, this.sheetContent(), { height: this.sheetKind === 'tool' || this.sheetKind === 'attachment' || this.sheetKind === 'model' ? SheetSize.LARGE : SheetSize.FIT_CONTENT, showClose: true })
   }
 }
