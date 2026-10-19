@@ -42,11 +42,13 @@
 
     powershell -File scripts/build.ps1 -Install -Launch
 
-模拟器可安装 unsigned HAP；真机需在 DevEco Studio 登录并配置自己的调试签名。签名信息和证书仅保留本地，不提交仓库。指定 USB 或 Wi-Fi HDC 目标安装签名版：
+安装脚本默认优先使用本机已生成的 signed HAP，与当前项目的 IDE 签名保持一致；没有签名产物时才回退 unsigned HAP。真机需在 DevEco Studio 登录并配置自己的调试签名。签名信息和证书仅保留本地，不提交仓库。指定 USB 或 Wi-Fi HDC 目标安装签名版：
 
     powershell -File scripts/build.ps1 -Install -Launch -Signed -DeviceTarget "设备的HDC目标"
 
 产物位于 entry/build/default/outputs/default，分别为 entry-default-unsigned.hap 和配置签名后生成的 entry-default-signed.hap。
+
+同一模拟器上的同包名应用应始终使用同一签名，后续手工 HDC 验证也安装 signed HAP。需要未签名包时可显式指定 -Unsigned，不能与 -Signed 同用。签名切换可能产生 9568332；保留数据卸载仍会校验原签名，清数据重装必须先征得使用者同意。脚本不会自动卸载，并会检查 HDC 的实际安装成功回执，避免只凭退出码 0 误判成功。
 
 测试（使用内置 Node）：
 
