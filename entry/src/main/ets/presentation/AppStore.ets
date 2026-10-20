@@ -189,15 +189,17 @@ export class AppStore {
   }
   private questionDrafts(): QuestionDraft[] { return this.interactions.filter((p: Interaction) => p.kind === 'form').map((p: Interaction): QuestionDraft => ({ id: p.id, fields: p.fields })); }
   private clearSavedDraft(): void { this.conversationMemory.save(this.connected, this.directory, this.sessionID, '', undefined, this.questionDrafts()); }
-  sessionRows(search: string = ''): SessionItem[] {
+  private knownSessions(): SessionItem[] {
     const sessions = this.sessions.slice();
     this.sessionPreferences.forEach((p: SessionPreference) => {
       if (p.directory === this.directory && p.title && !sessions.some((s: SessionItem) => s.id === p.id)) {
         sessions.push({ id: p.id, title: p.title, directory: p.directory, status: 'idle', model: '' });
       }
     });
-    return filterSessions(sessions, this.sessionPreferences, search || this.sessionQuery, this.showArchived);
+    return sessions;
   }
+  sessionRows(search: string = ''): SessionItem[] { return filterSessions(this.knownSessions(), this.sessionPreferences, search || this.sessionQuery, this.showArchived); }
+  recentSessions(): SessionItem[] { return filterSessions(this.knownSessions(), this.sessionPreferences, '', false).slice(0, 3); }
   sessionLabel(id: string): string {
     const label = sessionStatus(id, this.runningSessions, this.pendingItems);
     return label === '运行中' && this.runningUnknown ? '运行状态待确认' : label;

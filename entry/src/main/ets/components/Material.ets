@@ -48,37 +48,13 @@ export struct GlassPanel {
   }
 }
 
-// Small square status LED used for live/running/approval states.
+// Static status mark. Task state is conveyed by the accompanying text.
 @Component
 export struct StatusLed {
   @Prop color: ResourceColor = C.success;
-  @Prop pulse: boolean = false;
   @Prop ledSize: number = 5;
-  @State private wave: number = 0;
-
-  aboutToAppear(): void {
-    if (!this.pulse) {
-      return;
-    }
-    this.getUIContext().animateTo({ duration: 1500, iterations: -1, curve: Curve.EaseOut }, (): void => {
-      this.wave = 1;
-    });
-  }
-
   build() {
-    Stack() {
-      if (this.pulse) {
-        Circle()
-          .width(this.ledSize)
-          .height(this.ledSize)
-          .fill(this.color)
-          .opacity(0.34 * (1 - this.wave))
-          .scale({ x: 1 + this.wave * 2.2, y: 1 + this.wave * 2.2 })
-      }
-      Rect().width(this.ledSize).height(this.ledSize).radius(1).fill(this.color)
-    }
-    .width(this.ledSize * 3)
-    .height(this.ledSize * 3)
+    Stack() { Rect().width(this.ledSize).height(this.ledSize).radius(1).fill(this.color) }
+      .width(this.ledSize * 3).height(this.ledSize * 3)
   }
 }
-

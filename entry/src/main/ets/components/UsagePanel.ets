@@ -6,9 +6,9 @@ struct UsageMetric {
   @Prop value: string = '';
   build() {
     Row({ space: 12 }) {
-      Text(this.label).fontSize(11).fontColor(C.muted).maxLines(1).layoutWeight(1)
-      Text(this.value).fontSize(10).fontFamily('monospace').fontWeight(FontWeight.Medium).fontColor(C.text)
-    }.width('100%').height(27)
+      Text(this.label).fontSize(12.5).fontColor(C.secondary).layoutWeight(1)
+      Text(this.value).fontSize(12.5).fontFamily('monospace').fontWeight(FontWeight.Medium).fontColor(C.text)
+    }.width('100%').constraintSize({ minHeight: 36 }).padding({ top: 5, bottom: 5 })
   }
 }
 @Component
@@ -23,11 +23,6 @@ export struct UsagePanel {
   @Prop compact: CompactRecord = { id: '', state: '', error: '' };
   onRefresh: () => void = (): void => {};
   onCompact: () => void = (): void => {};
-  private contextPercent(): string {
-    if (this.contextLimit <= 0 || this.usage.input < 0) { return '0%'; }
-    const ratio: number = Math.min(1, this.usage.input / this.contextLimit);
-    return (ratio * 100).toFixed(1) + '%';
-  }
   build() {
     Scroll() {
       Column({ space: 12 }) {
@@ -51,19 +46,6 @@ export struct UsagePanel {
           Divider().strokeWidth(1).color(C.separator)
           UsageMetric({ label: '服务端记录费用（USD）', value: costLabel(this.usage.cost) })
         }.id('usage-metrics').width('100%').border({ width: { top: 1, bottom: 1 }, color: C.separator })
-        if (this.contextLimit > 0 && this.usage.input >= 0) {
-          Column({ space: 6 }) {
-            Row({ space: 8 }) {
-              Text(tokenLabel(this.usage.input) + ' / ' + tokenLabel(this.contextLimit)).fontSize(10)
-                .fontFamily('monospace').fontColor(C.muted).layoutWeight(1)
-              Text(this.contextPercent()).fontSize(10).fontFamily('monospace').fontColor(C.secondary)
-            }.width('100%')
-            Stack({ alignContent: Alignment.Start }) {
-              Row().width('100%').height(4).backgroundColor(C.field).borderRadius(2)
-              Row().width(this.contextPercent()).height(4).backgroundColor(C.accent).borderRadius(2)
-            }.width('100%').height(4)
-          }.width('100%')
-        }
         Text('用量和费用以服务器返回为准；未提供的项目不会按 0 计算。会话用量不能直接换算成当前上下文占用率。')
           .fontSize(11).lineHeight(17).fontColor(C.muted).width('100%')
         if (this.error) { Text(this.error).id('usage-error').fontSize(12.5).fontColor(C.danger).width('100%') }
@@ -77,11 +59,11 @@ export struct UsagePanel {
         }.width('100%').alignItems(HorizontalAlign.Start)
         Row({ space: 8 }) {
           Button(this.loading ? '正在读取…' : '重新读取', { type: ButtonType.Normal }).id('usage-refresh')
-            .layoutWeight(1).height(32).fontSize(12).fontColor(C.text)
+            .layoutWeight(1).height(40).fontSize(12).fontColor(C.text)
             .backgroundColor(Color.Transparent).border({ width: 1, color: C.separator }).borderRadius(8)
             .enabled(!this.loading && !this.busy).onClick(() => { this.onRefresh(); })
           Button(this.busy ? '正在提交…' : this.compact.state === 'unknown' ? '核对并重试压缩' : '压缩上下文', { type: ButtonType.Normal })
-            .id('compact-start').layoutWeight(1).height(36).fontSize(12.5).fontWeight(FontWeight.Medium)
+            .id('compact-start').layoutWeight(1).height(40).fontSize(12.5).fontWeight(FontWeight.Medium)
             .backgroundColor(C.btn).fontColor(C.btn_text).borderRadius(9)
             .enabled(!this.loading && !this.busy && !this.blocked && ['queued', 'running', 'submitting'].indexOf(this.compact.state) < 0)
             .onClick(() => { this.onCompact(); })

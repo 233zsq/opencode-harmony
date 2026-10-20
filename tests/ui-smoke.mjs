@@ -1,5 +1,6 @@
 // Run against tests/fake-server.mjs over an HDC reverse port; never invokes an Agent.
 import assert from 'node:assert/strict';
+import {find as nativeFind} from './native-driver.mjs';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -36,7 +37,7 @@ async function reveal(q){
   const all=layout(),root=bounds(all[0]),h=root[3],w=root[2],n=all.find(n=>n.id===q||n.text===q),b=n&&bounds(n);
   const list=all.find(n=>n.id==='conversation-list'&&n.visible!=='false');const chatControl=/^(choice-|field-|interaction-|approval-|reasoning-|tool-row-)/.test(q)&&list;
   const scroll=all.find(n=>n.type==='Scroll'&&n.visible!=='false');
-  const viewport=n?.viewportBounds?bounds({bounds:n.viewportBounds}):chatControl?bounds(list):scroll?bounds(scroll):[0,230,w,h-50];
+  const viewport=n?.viewportBounds?bounds({bounds:n.viewportBounds}):chatControl?bounds(list):n?[0,230,w,h-50]:scroll?bounds(scroll):[0,230,w,h-50];
   const tall=b&&b[3]-b[1]>=viewport[3]-viewport[1]-32;
   if(n&&n.visible!=='false'&&b[1]>=viewport[1]+(tall?0:8)&&b[3]<=viewport[3]+1&&b[3]-b[1]>(q.startsWith('choice-')?35:8))return n;
   const up=n?b[1]<=viewport[1]+30:i>=3;
@@ -45,7 +46,7 @@ async function reveal(q){
  }
  throw new Error('Control not visible: '+q);
 }
-async function input(q,text){assert.ok(!text.includes("'"));await reveal(q);await click(q);await pause(900);cmd('shell','uitest uiInput keyEvent 2072 2017');await pause(150);cmd('shell','uitest uiInput keyEvent 2055');await pause(150);cmd('shell',"uitest uiInput text '"+text+"'");await pause(300);if(layout().some(n=>n.bundleName==='com.huawei.hmos.inputmethod')){cmd('shell','uitest uiInput keyEvent Back');await pause(300);}}
+async function input(q,text){assert.ok(!text.includes("'"));await reveal(q);await click(q);await pause(900);cmd('shell','uitest uiInput keyEvent 2072 2017');await pause(150);cmd('shell','uitest uiInput keyEvent 2055');await pause(150);cmd('shell',"uitest uiInput text '"+text+"'");await pause(300);if(nativeFind('SkinBgContent')){cmd('shell','uitest uiInput keyEvent Back');await pause(300);}}
 async function shot(name){cmd('shell','snapshot_display -f /data/local/tmp/opencode-ui.jpeg');cmd('file','recv','/data/local/tmp/opencode-ui.jpeg',resolve('.test/'+(process.env.OPENCODE_UI_TAG||'')+name+'.jpeg'));}
 const state=async()=>await(await fetch(endpoint+'/__test/state')).json();
 const control=async path=>{const r=await fetch(endpoint+'/__test/'+path,{method:'POST'});assert.equal(r.status,200);return await r.json();};

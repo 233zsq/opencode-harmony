@@ -281,7 +281,7 @@ struct Index {
         Text(this.store.directory ? this.projectName().toUpperCase() : 'OPENCODE')
           .fontSize(9.5).fontFamily('monospace').letterSpacing(1.4).fontColor(C.muted).layoutWeight(1).maxLines(1)
         Row({ space: 6 }) {
-          StatusLed({ color: this.store.connected ? C.success : C.muted, pulse: !!this.store.connected })
+          StatusLed({ color: this.store.connected ? C.success : C.muted })
           Text(this.store.connected ? 'CONNECTED' : 'OFFLINE').fontSize(9.5).fontFamily('monospace')
             .letterSpacing(1).fontColor(C.secondary)
         }
@@ -302,9 +302,9 @@ struct Index {
           .border({ width: 1, color: C.separator }).enabled(!this.store.busy)
           .onClick(() => { this.navigate(this.store.connected ? 'projects' : 'connections'); })
       }.width('100%').margin({ top: 18 })
-      if (this.store.connected && this.store.directory && this.store.sessions.length) {
+      if (this.store.connected && this.store.directory && this.store.recentSessions().length) {
         this.sectionLabel('最近会话')
-        ForEach(this.store.sessions.slice(0, 3), (session: SessionItem) => {
+        ForEach(this.store.recentSessions(), (session: SessionItem) => {
           Row({ space: 10 }) {
             Column({ space: 3 }) {
               Text(session.title || '未命名会话').fontSize(12.5).fontColor(C.text).maxLines(1)
@@ -317,7 +317,7 @@ struct Index {
                 .letterSpacing(0.6).fontColor(C.warning)
             }
             SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12.5).fontColor([C.muted])
-          }.width('100%').height(46).padding({ left: 2, right: 2 })
+          }.id('recent-session-' + session.id).width('100%').constraintSize({ minHeight: 46 }).padding({ left: 2, right: 2, top: 6, bottom: 6 })
             .border({ width: { top: 1 }, color: C.separator })
             .onClick(() => { this.pickSession(session); })
         }, (session: SessionItem) => session.id + session.title + this.store.sessionLabel(session.id))
@@ -358,7 +358,7 @@ struct Index {
               }.alignItems(HorizontalAlign.Start).layoutWeight(1)
               if (this.store.connected === server.id) {
                 Row({ space: 5 }) {
-                  StatusLed({ color: C.success, pulse: true })
+                  StatusLed({ color: C.success })
                   Text('CONNECTED').fontSize(9.5).fontFamily('monospace').letterSpacing(0.8).fontColor(C.success)
                 }
               }
@@ -395,21 +395,24 @@ struct Index {
               .layoutWeight(1).backgroundColor(C.field).border({ width: 1, color: C.separator }).borderRadius(8)
           }
           Row({ space: 8 }) {
-            Checkbox({ name: 'allow-http' }).id('allow-http').enabled(!this.store.serverSaving && !this.store.busy).select(this.store.allowHttp).selectedColor(C.accent).width(18).height(18)
+            Checkbox({ name: 'allow-http' }).id('allow-http').enabled(!this.store.serverSaving && !this.store.busy).select(this.store.allowHttp).selectedColor(C.accent).width(22).height(22).responseRegion({ x: -9, y: -9, width: 40, height: 40 })
               .onChange((value: boolean) => { this.store.allowHttp = value; })
-            Text('允许 HTTP（仅可信局域网或本地隧道）').fontSize(11).fontColor(C.secondary).layoutWeight(1)
+            Text('允许 HTTP（仅可信局域网或本地隧道）').id('allow-http-label').fontSize(12.5).fontColor(C.secondary).layoutWeight(1).constraintSize({ minHeight: 40 })
+              .onClick(() => { if (!this.store.serverSaving && !this.store.busy) { this.store.allowHttp = !this.store.allowHttp; } })
           }.width('100%')
           Row({ space: 8 }) {
             Checkbox({ name: 'dedicated-trust' }).id('dedicated-trust').enabled(!this.store.serverSaving && !this.store.busy).select(this.store.useDedicatedTrust)
-              .selectedColor(C.accent).width(18).height(18)
+              .selectedColor(C.accent).width(22).height(22).responseRegion({ x: -9, y: -9, width: 40, height: 40 })
               .onChange((value: boolean) => { this.store.useDedicatedTrust = value; })
-            Text('使用专用服务器证书（IP 临时入口）').fontSize(11).fontColor(C.secondary).layoutWeight(1)
+            Text('使用专用服务器证书（IP 临时入口）').id('dedicated-trust-label').fontSize(12.5).fontColor(C.secondary).layoutWeight(1).constraintSize({ minHeight: 40 })
+              .onClick(() => { if (!this.store.serverSaving && !this.store.busy) { this.store.useDedicatedTrust = !this.store.useDedicatedTrust; } })
           }.width('100%')
           if (this.store.serverEditID) {
             Row({ space: 8 }) {
-              Checkbox().id('server-clear-password').select(this.store.clearServerPassword).width(18).height(18).enabled(!this.store.serverSaving)
+              Checkbox().id('server-clear-password').select(this.store.clearServerPassword).width(22).height(22).responseRegion({ x: -9, y: -9, width: 40, height: 40 }).enabled(!this.store.serverSaving)
                 .onChange((value: boolean) => { this.store.clearServerPassword = value; })
-              Text('清除已保存密码').fontSize(11).fontColor(C.secondary)
+              Text('清除已保存密码').id('server-clear-password-label').fontSize(12.5).fontColor(C.secondary).layoutWeight(1).constraintSize({ minHeight: 40 })
+              .onClick(() => { if (!this.store.serverSaving && !this.store.busy) { this.store.clearServerPassword = !this.store.clearServerPassword; } })
             }.width('100%')
             Text('修改地址或账号会清理此连接旧的本机会话位置、书签与模型偏好。密码留空会保留原密码。').fontSize(10).fontColor(C.muted).width('100%')
             Button('取消编辑').id('server-cancel-edit').height(30).fontSize(11).buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.secondary)
@@ -506,7 +509,7 @@ struct Index {
   interactionCard(item: Interaction) {
     Column({ space: 10 }) {
       Row({ space: 6 }) {
-        StatusLed({ color: item.kind === 'form' ? C.accent : C.warning, pulse: true })
+        StatusLed({ color: item.kind === 'form' ? C.accent : C.warning })
         Text(item.kind === 'form' ? '需要你的回答' : '等待操作审批').fontSize(9.5).fontFamily('monospace')
           .letterSpacing(0.8).fontColor(item.kind === 'form' ? C.accent : C.warning)
         Blank()
@@ -546,12 +549,11 @@ struct Index {
         Row({ space: 8 }) {
           Text(this.store.sessionTitle || '新对话').fontSize(11).fontColor(C.muted).maxLines(1).layoutWeight(1)
           if (this.store.sessionID) {
-            Row({ space: 4 }) {
-              Text(this.store.agents.find((a: AgentItem) => a.id === this.store.agentID)?.name || this.store.agentID || '默认 Agent')
-                .id('agent-select').fontSize(11).fontColor(C.secondary).maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: 166 })
-              SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(10).fontColor([C.muted])
-            }.height(26).padding({ left: 4, right: 4 })
+            Button(this.store.agents.find((a: AgentItem) => a.id === this.store.agentID)?.name || this.store.agentID || '默认 Agent', { type: ButtonType.Normal })
+              .id('agent-select').fontSize(12.5).fontColor(C.secondary).height(40)
+              .labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
+              .constraintSize({ maxWidth: Math.min(166, this.viewportWidth * 0.46) }).padding({ left: 8, right: 8 })
+              .backgroundColor(Color.Transparent).borderRadius(8).accessibilityText('选择会话 Agent')
               .onClick(() => { this.sheetKind = 'agent'; this.toolSheetOpen = true; this.store.refreshAgentState(); })
           }
           if (this.store.status !== '实时连接' && this.store.status !== '已连接') {
@@ -565,12 +567,12 @@ struct Index {
           }
           if (this.store.interactions.length) {
             Row({ space: 5 }) {
-              StatusLed({ color: C.warning, pulse: true })
+              StatusLed({ color: C.warning })
               Text('待处理 ' + this.store.interactions.length).fontSize(9.5).fontFamily('monospace').fontColor(C.warning)
             }
           } else if (this.store.working) {
             Row({ space: 5 }) {
-              StatusLed({ color: C.accent, pulse: true })
+              StatusLed({ color: C.accent })
               Text('运行中').fontSize(9.5).fontFamily('monospace').fontColor(C.secondary)
             }
           }
@@ -788,7 +790,7 @@ struct Index {
           Text('OPENCODE V2.0.29').fontSize(9.5).fontFamily('monospace').letterSpacing(1).fontColor(C.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.xmark')).fontSize(15).fontColor([C.secondary]) }
-          .id('close-sidebar').accessibilityText('关闭历史侧栏').width(30).height(30).backgroundColor(Color.Transparent)
+          .id('close-sidebar').accessibilityText('关闭历史侧栏').width(40).height(40).backgroundColor(Color.Transparent)
           .onClick(() => { this.sidebarOpen = false; })
       }.width('100%').padding({ top: 10, bottom: 16 })
       Button('新建对话', { type: ButtonType.Normal }).id('sidebar-new-chat').width('100%').height(36).fontSize(12.5)
@@ -853,7 +855,7 @@ struct Index {
           Text(this.serverName()).fontSize(12.5).fontColor(C.text).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Row({ space: 5 }) {
-            StatusLed({ color: this.store.connected ? C.success : C.muted, pulse: !!this.store.connected })
+            StatusLed({ color: this.store.connected ? C.success : C.muted })
             Text(this.store.status).fontSize(9.5).fontFamily('monospace').fontColor(C.muted).maxLines(1)
           }
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
@@ -972,9 +974,9 @@ struct Index {
       }.id((compact ? 'sidebar-session-' : 'session-') + session.id).alignItems(HorizontalAlign.Start).layoutWeight(1)
         .padding({ left: 2, top: 6, bottom: 6 }).onClick(() => { this.pickSession(session); })
       Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.ellipsis_circle')).fontSize(15).fontColor([C.muted]) }
-        .id('session-actions-' + session.id).width(28).height(28).backgroundColor(Color.Transparent)
+        .id('session-actions-' + session.id).width(40).height(40).backgroundColor(Color.Transparent)
         .accessibilityText('管理会话 ' + session.title).onClick(() => { this.manageSession(session); })
-    }.width('100%').height(compact ? 40 : 54).padding({ left: session.id === this.store.sessionID ? 8 : 10, right: 2 })
+    }.width('100%').constraintSize({ minHeight: compact ? 44 : 54 }).padding({ left: session.id === this.store.sessionID ? 8 : 10, right: 2 })
       .backgroundColor(session.id === this.store.sessionID ? C.chip : compact ? Color.Transparent : C.surface)
       .border({ width: compact ? 0 : 1, color: C.separator })
       .borderRadius(8)
@@ -990,8 +992,7 @@ struct Index {
   sessionActions() {
     Column({ space: 12 }) {
       Text('管理会话').fontSize(15).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
-      Text('LOCAL PREFERENCES · 仅影响这台设备').fontSize(9.5).letterSpacing(0.8)
-        .fontColor(C.muted).width('100%')
+      Text('会话名称会同步到服务器。').id('session-name-scope').fontSize(12.5).fontColor(C.secondary).width('100%')
       TextInput({ text: this.sessionName, placeholder: '会话名称' }).id('session-name').maxLength(200)
         .fontSize(13).fontColor(C.text).placeholderColor(C.muted).height(40)
         .backgroundColor(C.field).border({ width: 1, color: C.separator }).borderRadius(8)
@@ -1001,6 +1002,7 @@ struct Index {
         .backgroundColor(C.btn).fontColor(C.btn_text)
         .enabled(!this.store.sessionMutationBusy && !this.store.sessionPreferenceBusy && !!this.sessionName.trim())
         .onClick(() => { this.store.renameSession(this.selectedSession.id, this.sessionName).then((saved: boolean) => { if (saved) { this.toolSheetOpen = false; } }); })
+      Text('本机列表设置').id('session-local-scope').fontSize(11).fontColor(C.secondary).width('100%')
       Button(this.store.isPinned(this.selectedSession.id) ? '取消置顶' : '置顶会话', { type: ButtonType.Normal }).id('session-pin')
         .width('100%').height(32).fontSize(12).borderRadius(8).backgroundColor(Color.Transparent).fontColor(C.text)
         .border({ width: 1, color: C.separator })
@@ -1036,7 +1038,7 @@ struct Index {
           ListItem() {
             Column({ space: 5 }) {
               Row({ space: 6 }) {
-                StatusLed({ color: item.kind === 'form' ? C.accent : C.warning, pulse: true })
+                StatusLed({ color: item.kind === 'form' ? C.accent : C.warning })
                 Text((item.stale ? '待确认 · ' : '') + (item.kind === 'form' ? '需要回答' : '需要审批'))
                   .fontSize(9.5).fontFamily('monospace').letterSpacing(0.8)
                   .fontColor(item.kind === 'form' ? C.accent : C.warning)
@@ -1118,7 +1120,7 @@ struct Index {
       Blank().width(this.sidebarOpen ? 0 : 52).height(40)
       if (this.store.models.length) {
         Button(this.modelLabel(), { type: ButtonType.Normal }).id('model-select')
-          .fontSize(12.5).fontColor(C.text).height(34)
+          .fontSize(12.5).fontColor(C.text).height(40)
           .labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
           .backgroundColor(C.surface).border({ width: 1, color: C.separator }).borderRadius(999)
           .padding({ left: 13, right: 13 })

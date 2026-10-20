@@ -24,7 +24,7 @@
 - 退避重连、回前台同步、消息 ID 去重与迟到响应隔离；发送结果核对、草稿及 Question 答案在本次运行中暂存。
 - 跨项目待办中心、侧栏运行/待回答/待审批状态；消息/代码复制及原生多行输入。
 
-已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 214 项本机回归、4 项合成负载检查及完整构建，最新交互按使用者要求只在 API26 模拟器验收；真机留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 217 项本机回归、4 项合成负载检查及完整构建，最新交互按使用者要求只在 API26 模拟器验收；真机留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
 独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
@@ -62,6 +62,7 @@
     node tests/attachments.test.mjs
     node tests/permission-metadata.test.mjs
     node tests/appearance.test.mjs
+    node tests/ui-palette.test.mjs
     node tests/local-state.test.mjs
     node tests/workspace-http.test.mjs
     node tests/performance.mjs
@@ -109,3 +110,5 @@ scripts/provision-server.sh 是供核验后使用的独立实例部署脚本。�
 主要参考 [alvarolorentedev/opencode-mobile](https://github.com/alvarolorentedev/opencode-mobile) 的协议适配和同步设计，固定提交与来源见 [THIRD_PARTY.md](docs/THIRD_PARTY.md)。本项目使用 Apache-2.0；不使用参考应用的品牌或发布身份。
 
 OpenCode Harmony 是独立客户端，与 OpenCode 官方没有隶属关系。
+
+DeepSeek Graphite / Liquid Glass 分支的审查、修正和本轮验证范围见 [UI-REVIEW.md](docs/UI-REVIEW.md)。

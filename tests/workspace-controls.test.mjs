@@ -170,4 +170,10 @@ await test('branch source and Agent survive user renaming and server title refre
  data.parent.title='Server title';s.active=true;await s.sync();assert.equal(s.sessions[0].title,'Server title');
  for(const key of ['agent','parentID','forkType','forkBefore'])assert.equal(s.sessions[0][key],session[key]);
 });
+await test('home recent sessions exclude local archives, respect pins and ignore list search/archive mode',()=>{
+ const{s}=controlStore();s.sessions=Array.from({length:6},(_,i)=>({id:'s'+i,title:'Session '+i,directory:'/repo',status:'idle',model:''}));
+ s.sessionPreferences=[{id:'s0',archived:true,pinned:false},{id:'s4',archived:false,pinned:true}];s.showArchived=true;s.sessionQuery='does not match';
+ assert.equal(Array.from(s.recentSessions(),s=>s.id).join(','),'s4,s1,s2');assert.equal(s.showArchived,true);assert.equal(s.sessionQuery,'does not match');
+ s.sessionPreferences.push({id:'old-pin',pinned:true,archived:false,title:'Pinned outside current page',directory:'/repo'});assert.equal(Array.from(s.recentSessions(),s=>s.id).join(','),'s4,old-pin,s1');
+});
 console.log(count+' workspace control tests passed.');
