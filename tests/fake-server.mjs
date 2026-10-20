@@ -103,6 +103,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === '/__test/permission-read-failure' && req.method === 'POST') { permissionReadFailure = url.searchParams.get('enabled') === '1'; return send(res, { permissionReadFailure }); }
   if (path === '/__test/approval' && req.method === 'POST') { if (!permissions.length) permissions.push(permission()); event('permission.asked', permissions[0]); return send(res, { created: true }); }
+  if (path === '/__test/approval-new' && req.method === 'POST') { const item = permission(); item.id = 'per_' + Date.now().toString(36); permissions.push(item); event('permission.asked', item); return send(res, { created: true, id: item.id }); }
   if (path === '/__test/ui-phase' && req.method === 'POST') {
     const phase=url.searchParams.get('phase');let m=messages.find(m=>m.id===uiMessageID);
     if(phase==='thinking') {
@@ -115,6 +116,9 @@ const server = http.createServer(async (req, res) => {
       m.content.push({type:'text',text:'## 可以开始了\n\n已检查示例文件，接下来可以完善交互。工具细节按需查看，正文保持清晰。'});
       m.content.push({type:'tool',id:'call_'+m.id,name:'read',time:{created:Date.now()},state:{status:'running',input:{path:'src/example.ets'},content:[]}});
       event('session.text.ended',{sessionID:session.id,assistantMessageID:m.id,ordinal:1,text:m.content[1].text});
+    } else if(m && phase==='tool-failed') {
+      const failedTool=m.content.find(c=>c.type==='tool');if(failedTool){failedTool.state.status='error';failedTool.state.content=[{type:'text',text:'UI fixture tool failure'}];failedTool.time.completed=Date.now();}
+      m.finish='error';m.time.completed=Date.now();m.error={message:'UI fixture model failure'};active=false;event('session.idle',{sessionID:session.id});
     } else if(m && phase==='tool-done') {
       const t=m.content.find(c=>c.type==='tool');t.state.status='completed';t.state.content=[{type:'text',text:'UI fixture tool result: verified sample only.'}];t.time.completed=Date.now();m.time.completed=Date.now();active=false;event('session.idle',{sessionID:session.id});
     } else return send(res,{error:'Invalid UI phase'},400);
@@ -248,3 +252,5 @@ const server = http.createServer(async (req, res) => {
   send(res, { error: 'Not found' }, 404);
 });
 server.listen(port, '127.0.0.1', () => console.log('Local V2 fixture: http://127.0.0.1:' + port));
+
+

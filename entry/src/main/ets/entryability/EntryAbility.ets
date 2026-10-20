@@ -2,13 +2,33 @@ import { Appearance } from '../presentation/Appearance';
 import { AbilityConstant, Configuration, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { NOTIFICATION_LAUNCH_KEY, notificationLaunchValue, notificationTargetFromParameters } from '../domain/Notifications';
 
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     Appearance.restore(this.context);
+    this.rememberNotificationLaunch(want);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+  }
+
+  // A tap on a notification while the ability is alive arrives here. Parameters
+  // are application-internal want data, never visible notification text.
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    this.rememberNotificationLaunch(want);
+    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onNewWant');
+  }
+
+  private rememberNotificationLaunch(want: Want): void {
+    try {
+      const target = notificationTargetFromParameters(want.parameters);
+      if (!target) { return; }
+      // The Index page watches this AppStorage entry and uses the existing safe
+      // navigation flow; the timestamp makes repeated taps on the same
+      // notification produce distinct values.
+      AppStorage.setOrCreate(NOTIFICATION_LAUNCH_KEY, notificationLaunchValue(target, Date.now()));
+    } catch (_) { /* a reminder deep link must never block launching the app */ }
   }
 
   onDestroy(): void {

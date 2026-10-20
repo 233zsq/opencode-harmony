@@ -21,5 +21,6 @@ export struct NativeSegments {
   build() {
     SegmentButton({ options: this.options, selectedIndexes: $selection,
       onItemClicked: (index: number): void => { this.onSelect(index); } }).width('100%')
+      .responseRegion({ x: 0, y: -4, width: '100%', height: 48 })
   }
 }

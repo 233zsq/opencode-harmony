@@ -24,24 +24,31 @@ export struct ForkPanel {
           .padding(10).width('100%').backgroundColor(C.field).borderRadius(8) }
         Text('分叉沿用当前工作区文件状态。创建分支不会自动发送消息或调用模型。').fontSize(11).lineHeight(17).fontColor(C.muted).width('100%')
         if (this.editing) {
-          TextArea({ text: this.text, placeholder: '修改这条问题，稍后在新会话确认发送' }).id('fork-text').fontSize(13).maxLength(20000).height(180)
-            .backgroundColor(C.field).borderRadius(8).placeholderColor(C.muted)
+          TextArea({ text: this.text, placeholder: '修改这条问题，稍后在新会话确认发送' }).id('fork-text').fontSize(13).maxLength(20000).constraintSize({ minHeight: 180 })
+            .backgroundColor(C.field).borderRadius(8).placeholderColor(C.muted).accessibilityText('编辑分叉的问题')
             .enabled(!this.busy).onChange((value: string) => { this.text = value; })
-          if (this.hasFiles) { Row({ space: 8 }) { Checkbox().id('fork-reuse-files').select(this.reuseFiles).selectedColor(C.accent).width(22).height(22).enabled(!this.busy).onChange((value: boolean) => { this.reuseFiles = value; })
-            Text('沿用原消息附件').fontSize(12.5).fontColor(C.secondary) }.width('100%') }
+          if (this.hasFiles) { Row({ space: 8 }) { Checkbox().id('fork-reuse-files').select(this.reuseFiles).selectedColor(C.accent).width(22).height(22)
+            .responseRegion({ x: -9, y: -9, width: 40, height: 40 }).accessibilityText('沿用原消息附件')
+            .enabled(!this.busy).onChange((value: boolean) => { this.reuseFiles = value; })
+            Text('沿用原消息附件').fontSize(12.5).fontColor(C.secondary).layoutWeight(1).constraintSize({ minHeight: 40 })
+              .onClick(() => { if (!this.busy) { this.reuseFiles = !this.reuseFiles; } }) }.width('100%') }
           Text('编辑后的问题会放入新会话草稿，由你确认发送。').fontSize(11).lineHeight(17).fontColor(C.muted).width('100%')
         }
         if (this.blocked) { Text('请先结束任务、确认发送结果并处理问题或审批。').id('fork-blocked').fontSize(12.5).fontColor(C.warning).width('100%') }
         if (this.error) { Text(this.error).id('fork-error').fontSize(12.5).fontColor(C.danger).width('100%') }
         Button(this.busy ? '正在创建…' : this.editing ? '创建分支并填写草稿' : '创建分支', { type: ButtonType.Normal }).id('fork-create')
-          .height(36).width('100%').fontSize(12.5).fontWeight(FontWeight.Medium).backgroundColor(C.btn).fontColor(C.btn_text).borderRadius(9)
+          .constraintSize({ minHeight: 36 }).width('100%').fontSize(12.5).fontWeight(FontWeight.Medium).backgroundColor(C.btn).fontColor(C.btn_text).borderRadius(9)
+          .responseRegion({ x: 0, y: -2, width: '100%', height: 40 })
           .enabled(!this.busy && !this.blocked && !this.uncertain).onClick(() => { this.onCreate(this.text, this.reuseFiles); })
         if (this.uncertain) {
-          Button('检查会话列表', { type: ButtonType.Normal }).id('fork-review').height(32).width('100%').fontSize(12)
+          Button('检查会话列表', { type: ButtonType.Normal }).id('fork-review').constraintSize({ minHeight: 32 }).width('100%').fontSize(12)
             .backgroundColor(Color.Transparent).fontColor(C.text).border({ width: 1, color: C.separator }).borderRadius(8)
+            .responseRegion({ x: 0, y: -4, width: '100%', height: 40 })
+            .accessibilityDescription('打开会话列表核对是否已创建分支')
             .onClick(() => { this.onReview(); })
-          Button('已检查，允许重新创建', { type: ButtonType.Normal }).id('fork-checked').height(32).width('100%').fontSize(12)
+          Button('已检查，允许重新创建', { type: ButtonType.Normal }).id('fork-checked').constraintSize({ minHeight: 32 }).width('100%').fontSize(12)
             .backgroundColor(Color.Transparent).fontColor(C.text).border({ width: 1, color: C.separator }).borderRadius(8)
+            .responseRegion({ x: 0, y: -4, width: '100%', height: 40 })
             .onClick(() => { this.onChecked(); })
         }
       }.padding({ left: 20, right: 20, top: 8, bottom: 24 }).width('100%')

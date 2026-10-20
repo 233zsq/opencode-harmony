@@ -7,7 +7,7 @@ struct UsageMetric {
   build() {
     Row({ space: 12 }) {
       Text(this.label).fontSize(12.5).fontColor(C.secondary).layoutWeight(1)
-      Text(this.value).fontSize(12.5).fontFamily('monospace').fontWeight(FontWeight.Medium).fontColor(C.text)
+      Text(this.value).fontSize(12.5).fontFamily('monospace').fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(1)
     }.width('100%').constraintSize({ minHeight: 36 }).padding({ top: 5, bottom: 5 })
   }
 }
@@ -59,11 +59,12 @@ export struct UsagePanel {
         }.width('100%').alignItems(HorizontalAlign.Start)
         Row({ space: 8 }) {
           Button(this.loading ? '正在读取…' : '重新读取', { type: ButtonType.Normal }).id('usage-refresh')
-            .layoutWeight(1).height(40).fontSize(12).fontColor(C.text)
+            .layoutWeight(1).constraintSize({ minHeight: 40 }).fontSize(12).fontColor(C.text)
             .backgroundColor(Color.Transparent).border({ width: 1, color: C.separator }).borderRadius(8)
+            .accessibilityText('重新读取用量与上下文')
             .enabled(!this.loading && !this.busy).onClick(() => { this.onRefresh(); })
           Button(this.busy ? '正在提交…' : this.compact.state === 'unknown' ? '核对并重试压缩' : '压缩上下文', { type: ButtonType.Normal })
-            .id('compact-start').layoutWeight(1).height(40).fontSize(12.5).fontWeight(FontWeight.Medium)
+            .id('compact-start').layoutWeight(1).constraintSize({ minHeight: 40 }).fontSize(12.5).fontWeight(FontWeight.Medium)
             .backgroundColor(C.btn).fontColor(C.btn_text).borderRadius(9)
             .enabled(!this.loading && !this.busy && !this.blocked && ['queued', 'running', 'submitting'].indexOf(this.compact.state) < 0)
             .onClick(() => { this.onCompact(); })

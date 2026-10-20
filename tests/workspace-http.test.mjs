@@ -65,6 +65,7 @@ load('entry/src/main/ets/domain/SessionUsage.ts', '../domain/SessionUsage');load
 load('entry/src/main/ets/domain/Agents.ts', '../domain/Agents');
 load('entry/src/main/ets/domain/TranscriptExport.ts', '../domain/TranscriptExport');
 const {Protocol}=load('entry/src/main/ets/data/Protocol.ets','../data/Protocol');load('entry/src/main/ets/presentation/ProviderStore.ets','./ProviderStore');
+load('entry/src/main/ets/domain/Notifications.ts','../domain/Notifications');
 const {AppStore}=load('entry/src/main/ets/presentation/AppStore.ets','store');const api=new Protocol({url,username:'u',allowHttp:true},'test-only');
 const store=new AppStore();store.api=api;store.connected='loopback';store.directory='/repo';store.projects=await api.projects();
 let count=0;async function test(name,run){await run();count++;console.log('PASS '+name);}

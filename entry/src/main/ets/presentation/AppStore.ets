@@ -10,6 +10,8 @@ import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, parseUsage, parseCompactRecord, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
   DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
+import { TaskNotification, TaskNotifySink, NoopTaskNotifier, NotificationLedger, NotificationKind, NotificationTarget,
+  pendingNotificationKind, completionEventID, isQuietReminder } from '../domain/Notifications';
 
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
@@ -165,6 +167,24 @@ export class AppStore {
   private eventEpoch: number = 0;
   private eventIDs: string[] = [];
   private initialized: boolean = false;
+  taskNotifier: TaskNotifySink = new NoopTaskNotifier();
+  foreground: boolean = true;
+  reminderQuiet: string = '';
+  reminderQuietSeq: number = 0;
+  targetBusy: boolean = false;
+  // Short best-effort window after leaving the foreground. The existing SSE
+  // connection is kept alive; the system may freeze it at any time. This is not
+  // a background service and never polls or keeps the process artificially alive.
+  private backgroundReminderTimer: number = -1;
+  private notificationLedger: NotificationLedger = new NotificationLedger();
+  private notifyBaseline: boolean = false;
+  private syncSuppressNotify: boolean = false;
+  // The first global pending read after (re)connecting seeds existing items.
+  private pendingBaseline: boolean = true;
+  private pendingSuppressNotify: boolean = false;
+  private taskIdlePending: boolean = false;
+  private runningTokens: Map<string, number> = new Map<string, number>();
+  private runningTokenSeq: number = 0;
 
   async init(context: common.Context): Promise<void> {
     if (this.initialized) { return; }
@@ -173,6 +193,34 @@ export class AppStore {
       const server = this.servers.find((s: ServerConfig) => s.id === last);
       if (server) { await this.connect(server); } }
     catch (e) { this.fail(e as Error); }
+  }
+  // Injected once by the Index page: the platform notification center in the
+  // app and a recording fake in the Node tests. AppStore never imports the
+  // notification platform modules itself.
+  attachNotifier(sink: TaskNotifySink, foreground: boolean = true): void {
+    this.taskNotifier = sink; this.foreground = foreground;
+  }
+  setForeground(foreground: boolean): void {
+    this.foreground = foreground;
+    if (!foreground) { this.suppressNotificationCatchUp(); }
+  }
+  beginBackgroundReminderWindow(ms: number): void {
+    this.foreground = false;
+    this.cancelBackgroundReminderWindow();
+    this.backgroundReminderTimer = setTimeout(() => {
+      this.backgroundReminderTimer = -1;
+      this.setActive(false);
+    }, ms);
+  }
+  cancelBackgroundReminderWindow(): void {
+    if (this.backgroundReminderTimer >= 0) { clearTimeout(this.backgroundReminderTimer); this.backgroundReminderTimer = -1; }
+  }
+  // Leaving the foreground pauses the existing network loop. The first sync and
+  // pending refresh after coming back must seed state instead of alerting for
+  // work that finished while the app was away.
+  private suppressNotificationCatchUp(): void {
+    this.syncSuppressNotify = true;
+    this.pendingSuppressNotify = true;
   }
   private fail(error: Error): void {
     this.error = error.message || '操作失败，请重新连接';
@@ -280,6 +328,7 @@ export class AppStore {
         const active = object(object(await api.request('/api/session/active'))['data']);
         if (api !== this.api || epoch !== this.pendingEpoch) { return; }
         this.runningSessions = Object.keys(active); this.runningUnknown = false;
+        this.detectSessionCompletions(this.runningSessions);
       } catch (e) {
         if (api !== this.api || epoch !== this.pendingEpoch) { return; }
         this.runningUnknown = true; errors.push('运行状态读取失败');
@@ -305,6 +354,7 @@ export class AppStore {
       this.pendingItems = Array.from(unique.values()).slice(0, 500);
       this.pendingError = errors.join('；') + (truncated ? '。显示范围已达上限，请打开对应项目单独处理。' : '');
       this.pendingUpdated = Date.now();
+      this.detectPendingNotifications(errors.length > 0);
     } finally { if (epoch === this.pendingEpoch) { this.pendingBusy = false; } }
   }
   async openPending(item: PendingItem): Promise<void> {
@@ -324,6 +374,141 @@ export class AppStore {
       this.queueWorkspace();
     } catch (e) { if (api === this.api) { this.fail(e as Error); } }
     finally { if (api === this.api) { this.busy = false; } }
+  }
+  private lastAssistantMessage(): ChatMessage | undefined {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const message = this.messages[i];
+      if (message.role === 'assistant') { return message; }
+    }
+    return undefined;
+  }
+  private sessionDirectory(sessionID: string): string {
+    return this.sessions.find((item: SessionItem) => item.id === sessionID)?.directory || this.directory;
+  }
+  private completionEvent(): TaskNotification | undefined {
+    if (!this.connected || !this.sessionID) { return undefined; }
+    const last = this.lastAssistantMessage();
+    const kind: NotificationKind = last && last.state === 'failed' ? 'failed' : 'completed';
+    // A single completion identity per assistant message. The message state can
+    // move from streaming to completed between two syncs; including it would
+    // create a second notification for the same finished task.
+    const eventID = completionEventID(last ? last.id : '', this.sessionID);
+    return { serverID: this.connected, directory: this.directory, sessionID: this.sessionID,
+      kind: kind, eventID: eventID, sessionTitle: this.sessionTitle };
+  }
+  private pendingEvent(item: PendingItem): TaskNotification {
+    return { serverID: this.connected, directory: item.directory, sessionID: item.sessionID,
+      kind: pendingNotificationKind(item.kind), eventID: item.id, sessionTitle: item.sessionTitle };
+  }
+  private interactionEvent(sessionID: string, item: Interaction): TaskNotification {
+    const session = this.sessions.find((value: SessionItem) => value.id === sessionID);
+    return { serverID: this.connected, directory: session?.directory || this.directory, sessionID: sessionID,
+      kind: pendingNotificationKind(item.kind), eventID: item.id, sessionTitle: session?.title || this.sessionTitle };
+  }
+  // Ledger dedupe happens before any delivery, so a rejected permission or a
+  // failing platform publish can never make the same event retry every sync.
+  private dispatchReminder(event: TaskNotification): void {
+    if (!event.serverID || !event.sessionID) { return; }
+    if (!this.notificationLedger.offer(event)) { return; }
+    if (isQuietReminder(event, this.sessionID, this.foreground)) {
+      this.reminderQuiet = event.kind; this.reminderQuietSeq = this.reminderQuietSeq + 1; return;
+    }
+    try { this.taskNotifier.publish(event); } catch (_) { /* a reminder never breaks chat */ }
+  }
+  private seedReminderBaseline(): void {
+    const completion = this.completionEvent();
+    if (completion) { this.notificationLedger.markSeen(completion); }
+    this.interactions.forEach((item: Interaction) => {
+      if (item.state !== 'submitting') { this.notificationLedger.markSeen(this.interactionEvent(this.sessionID, item)); }
+    });
+    this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
+  }
+  private finishReminderSync(): void {
+    if (this.readingHistory) { return; }
+    const suppress = this.notifyBaseline || this.syncSuppressNotify;
+    this.notifyBaseline = false; this.syncSuppressNotify = false;
+    if (suppress) { this.seedReminderBaseline(); this.taskIdlePending = false; return; }
+    if (this.taskIdlePending && !this.working) {
+      this.taskIdlePending = false;
+      const completion = this.completionEvent();
+      if (completion) { this.dispatchReminder(completion); }
+    }
+  }
+  // Only interactions that are still pending after a normal sync are announced.
+  // Baseline, older-history reads and post-reconnect catch-up stay quiet.
+  private detectInteractionNotifications(sessionID: string, items: Interaction[]): void {
+    if (this.notifyBaseline || this.syncSuppressNotify || this.readingHistory || !this.connected) { return; }
+    items.forEach((item: Interaction) => {
+      if (item.state === 'submitting') { return; }
+      this.dispatchReminder(this.interactionEvent(sessionID, item));
+    });
+  }
+  // The first successful global pending read seeds existing items. A read with
+  // failing scopes keeps the baseline so no half-read state can cause alerts.
+  private detectPendingNotifications(failed: boolean): void {
+    if (this.pendingBaseline) {
+      if (!failed) {
+        this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
+        this.pendingBaseline = false;
+      }
+      return;
+    }
+    if (this.pendingSuppressNotify) {
+      this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
+      this.pendingSuppressNotify = false; return;
+    }
+    this.pendingItems.forEach((item: PendingItem) => { if (!item.stale) { this.dispatchReminder(this.pendingEvent(item)); } });
+  }
+  // Foreground other conversations: when /api/session/active stops listing a
+  // session the client had observed running, that task has ended. The exact
+  // failure state is unknown without reading that transcript, so it is reported
+  // as completed; the conversation itself still shows the real failure.
+  private detectSessionCompletions(ids: string[]): void {
+    const next = new Set<string>();
+    ids.forEach((id: string) => { next.add(id); });
+    next.forEach((id: string) => {
+      if (!this.runningTokens.has(id)) {
+        this.runningTokenSeq = this.runningTokenSeq + 1; this.runningTokens.set(id, this.runningTokenSeq);
+      }
+    });
+    const suppress = this.pendingBaseline || this.pendingSuppressNotify;
+    const previous: string[] = Array.from(this.runningTokens.keys());
+    previous.forEach((id: string) => {
+      if (next.has(id)) { return; }
+      const token = this.runningTokens.get(id) || 0;
+      this.runningTokens.delete(id);
+      if (suppress || !this.connected || id === this.sessionID) { return; }
+      this.dispatchReminder({ serverID: this.connected, directory: this.sessionDirectory(id), sessionID: id,
+        kind: 'completed', eventID: 'idle:' + String(token) });
+    });
+  }
+  // Deep link from a system notification. It reuses the normal safe navigation:
+  // the current draft is stashed first, a different server is connected through
+  // the existing flow, then the project and session are opened.
+  async openNotificationTarget(target: NotificationTarget): Promise<boolean> {
+    if (this.targetBusy || !target || !target.serverID || !target.sessionID) { return false; }
+    this.targetBusy = true; this.error = '';
+    try {
+      const server = this.servers.find((item: ServerConfig) => item.id === target.serverID);
+      if (!server) { this.error = '提醒对应的服务器已从本机移除，请在连接页重新添加。'; return false; }
+      if (this.connected !== target.serverID) {
+        await this.connect(server);
+        if (this.connected !== target.serverID) { return false; }
+      }
+      if (!this.api) { return false; }
+      const directory = target.directory || this.directory;
+      if (directory && directory !== this.directory) {
+        await this.selectProject(directory);
+        if (this.directory !== directory || this.sessionsError) { return false; }
+      }
+      if (this.connected !== target.serverID) { return false; }
+      const known = this.sessions.find((item: SessionItem) => item.id === target.sessionID);
+      const session = known || await this.api.session(target.sessionID);
+      if (!session || session.id !== target.sessionID) { return false; }
+      await this.openSession(session);
+      return this.connected === target.serverID && this.sessionID === target.sessionID;
+    } catch (e) { this.fail(e as Error); return false; }
+    finally { this.targetBusy = false; }
   }
   async reconnect(): Promise<void> {
     const server = this.servers.find((s: ServerConfig) => s.id === this.connected);
@@ -417,7 +602,10 @@ export class AppStore {
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
     this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false; this.interrupting = false;
-    this.resetSessionControl(); this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false; return true;
+    this.resetSessionControl(); this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false;
+    this.notificationLedger = new NotificationLedger(); this.notifyBaseline = false; this.syncSuppressNotify = false;
+    this.pendingBaseline = true; this.pendingSuppressNotify = false; this.taskIdlePending = false; this.runningTokens = new Map<string, number>();
+    this.reminderQuiet = ''; this.reminderQuietSeq = 0; this.targetBusy = false; return true;
   }
   async connect(config: ServerConfig): Promise<void> {
     if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true;
@@ -432,6 +620,7 @@ export class AppStore {
       const flags = await this.storage.sessionPreferences(config.id);
       if (generation !== this.generation) { return; }
       this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects; this.sessionPreferences = flags;
+      this.pendingBaseline = true; this.syncSuppressNotify = false; this.pendingSuppressNotify = false; this.taskIdlePending = false;
       this.storage.rememberServer(config.id).catch((e: Error) => this.fail(e));
       this.status = '已连接'; this.pane = 'chat'; this.attempts = 0; this.openStream();
       this.pollTimer = setInterval(() => {
@@ -464,8 +653,9 @@ export class AppStore {
     if (this.refreshTimer >= 0) { clearTimeout(this.refreshTimer); this.refreshTimer = -1; }
   }
   setActive(active: boolean): void {
-    this.active = active; this.providers.setActive(active);
+    this.active = active; this.providers.setActive(active); this.foreground = active;
     if (!active) {
+      this.suppressNotificationCatchUp();
       this.pendingEpoch++; this.pendingBusy = false;
       this.streamEpoch++; this.streamClose?.(); this.streamClose = undefined;
       if (this.workspaceTimer >= 0) { clearTimeout(this.workspaceTimer); this.workspaceTimer = -1; }
@@ -512,10 +702,15 @@ export class AppStore {
       if (this.readingHistory && !this.messages.some((m: ChatMessage) => m.id === messageID)) { this.newerAvailable = true; }
       else { this.messages = applyTextDelta(this.messages, messageID, ordinal, partType,
         string(data[ended ? 'text' : 'delta']), ended).slice(-300); }
-      this.working = true;
+      this.working = true; this.taskIdlePending = false;
       if (ended) { this.queueSync(); }
     } else {
-      if (type === 'session.idle') { this.working = false; }
+      if (type === 'session.idle') {
+        const wasWorking = this.working; this.working = false;
+        // The task may be finished; a following sync decides completed/failed
+        // from the newest assistant message before anything is displayed.
+        if (wasWorking) { this.taskIdlePending = true; }
+      }
       if (type.indexOf('retry') >= 0) { this.working = true; }
       this.queueSync();
     }
@@ -572,6 +767,9 @@ export class AppStore {
     this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model; this.resetSessionControl(); this.parentSessionID = session.parentID || ''; this.branchBoundary = session.forkType === 'before' ? '所选消息之前' : session.forkType === 'through' ? '创建分叉时的最后一条消息' : '';
+    // Existing history and pending items are seeded on the first sync; they are
+    // never announced as new while the user is opening the conversation.
+    this.notifyBaseline = true; this.taskIdlePending = false;
     this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
     const saved = this.conversationMemory.read(this.connected, this.directory, session.id);
     this.draft = saved.text; this.attachments = saved.files || []; this.pendingSend = saved.pending; this.working = false; this.interrupting = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); this.queueWorkspace();
@@ -624,14 +822,16 @@ export class AppStore {
           this.sessionTitle = title;
           this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model, agent: item.agent, parentID: item.parentID, forkType: item.forkType, forkBefore: item.forkBefore, updated: item.updated, archived: item.archived }));
         }
+        const wasWorking = this.working; const wasListedRunning = this.runningSessions.indexOf(id) >= 0;
         if (active[id] !== undefined || inbox.length > 0) { this.working = true; }
-        else if (detail['outcome']) { this.working = false; }
+        else if (detail['outcome']) { this.working = false; if (wasWorking || wasListedRunning) { this.taskIdlePending = true; } }
         const model = object(detail['model']);
         if (selection === this.selectionEpoch) {
           this.agentID = string(detail['agent']);
           if (model['id']) { this.modelID = string(model['providerID']) + '/' + string(model['id']); }
           else { this.modelID = this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; }
         }
+        this.finishReminderSync();
       }
     } catch (e) {
       if (generation === this.generation) {
@@ -663,6 +863,7 @@ export class AppStore {
       const combined = this.interactions.filter((p: Interaction) => p.kind !== kind).concat(next);
       if (JSON.stringify(this.interactions) !== JSON.stringify(combined)) { this.interactions = combined; }
       if (kind === 'permission') { this.permissionError = ''; }
+      this.detectInteractionNotifications(id, next);
     } catch (e) {
       if (generation === this.generation && (kind !== 'permission' || epoch === this.permissionEpoch)) {
         if (kind === 'permission') { this.permissionError = '审批列表读取失败，已保留上次结果。请重新读取后再批准；仍可拒绝已显示的请求。'; }
@@ -689,6 +890,8 @@ export class AppStore {
   }
   async latest(): Promise<void> {
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
+    // Returning from older history is a catch-up view, not a new event.
+    this.notifyBaseline = true; this.taskIdlePending = false;
     this.messages = []; this.cursor = ''; this.tailLoaded = false; this.syncAgain = true;
     await this.sync();
   }
@@ -1042,3 +1245,8 @@ export class AppStore {
     } catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
   }
 }
+
+
+
+
+

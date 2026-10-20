@@ -47,6 +47,7 @@ const agentsDomain=load('entry/src/main/ets/domain/Agents.ts', '../domain/Agents
 const exportsDomain=load('entry/src/main/ets/domain/TranscriptExport.ts', '../domain/TranscriptExport');
 const protocol = load('entry/src/main/ets/data/Protocol.ets', '../data/Protocol');
 const { ProviderStore } = load('entry/src/main/ets/presentation/ProviderStore.ets', './ProviderStore');
+const notificationsDomain = load('entry/src/main/ets/domain/Notifications.ts', '../domain/Notifications');
 const { AppStore } = load('entry/src/main/ets/presentation/AppStore.ets', 'store');
 let count = 0;
 async function test(name, run) { await run(); count++; console.log('PASS ' + name); }
@@ -538,4 +539,52 @@ await test('a successful model switch clears previous errors while a rejected sw
  const store=new AppStore();store.sessionID='s';store.active=false;store.modelID='p/old';store.error='Old error';store.api={request:async()=>({})};await store.chooseModel('p/new');assert.equal(store.modelID,'p/new');assert.equal(store.error,'');
  store.api.request=async()=>{throw new protocol.ApiError(400,'Unsupported model');};await store.chooseModel('p/bad');assert.equal(store.modelID,'p/new');assert.match(store.error,/Unsupported/);
 });
+const reminderSink=()=>{const events=[];return{events,publish(event){events.push(event);}};};
+const reminderApi=state=>({stream:()=>()=>{},messages:async()=>({data:[],cursor:{}}),parseMessages:()=>state.messages,
+  interactions:async()=>[],request:async path=>path==='/api/session/active'?{data:state.active}:path.endsWith('/inbox')?{data:[]}:{data:state.detail}});
+await test('reminders: initial history stays quiet and one completion alerts once',async()=>{
+  const sink=reminderSink();const store=new AppStore();store.connected='one';store.directory='/repo';store.active=true;store.attachNotifier(sink,false);
+  const state={messages:[message('m0','old')],active:{},detail:{outcome:'succeeded'}};store.api=reminderApi(state);
+  await store.openSession({id:'ses_a',title:'A',directory:'/repo',model:''});assert.equal(sink.events.length,0);
+  state.messages=[message('m0','old'),message('m1','new')];state.active={};
+  store.onFrame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'ses_a',assistantMessageID:'m1',ordinal:0,delta:'x'}})});
+  store.onFrame({data:JSON.stringify({type:'session.idle',data:{sessionID:'ses_a'}})});await store.sync();
+  assert.equal(sink.events.length,1);assert.equal(sink.events[0].kind,'completed');assert.equal(sink.events[0].eventID,'idle:m1');
+  await store.sync();assert.equal(sink.events.length,1);
+});
+await test('reminders: the same event ID on another server is not suppressed',async()=>{
+  const ledger=new notificationsDomain.NotificationLedger();const event={serverID:'a',directory:'/repo',sessionID:'s',kind:'completed',eventID:'evt'};
+  assert.equal(ledger.offer(event),true);assert.equal(ledger.offer({...event,serverID:'b'}),true);assert.equal(ledger.offer({...event}),false);
+});
+await test('reminders: opening a notification target keeps unsent drafts',async()=>{
+  const sink=reminderSink();const store=new AppStore();store.connected='one';store.directory='/repo';store.active=true;store.attachNotifier(sink,false);
+  store.servers=[{id:'one',name:'One',url:'https://one.example',username:'opencode',allowHttp:false}];
+  const state={messages:[],active:{},detail:{outcome:'succeeded'}};store.api=reminderApi(state);
+  store.sessions=[{id:'ses_a',title:'A',directory:'/repo',status:'idle',model:''},{id:'ses_b',title:'B',directory:'/repo',status:'idle',model:''}];
+  await store.openSession(store.sessions[0]);store.draft='draft A';
+  assert.equal(await store.openNotificationTarget({serverID:'one',directory:'/repo',sessionID:'ses_b',eventID:'evt'}),true);
+  assert.equal(store.sessionID,'ses_b');assert.equal(store.draft,'');
+  assert.equal(await store.openNotificationTarget({serverID:'one',directory:'/repo',sessionID:'ses_a',eventID:'evt'}),true);
+  assert.equal(store.draft,'draft A');
+  assert.equal(await store.openNotificationTarget({serverID:'removed',directory:'/repo',sessionID:'ses_a',eventID:'evt'}),false);
+  assert.equal(store.sessionID,'ses_a');assert.equal(store.targetBusy,false);
+});
+await test('reminders: a throwing notifier cannot break chat sync or set a chat error',async()=>{
+  const store=new AppStore();store.connected='one';store.directory='/repo';store.active=true;store.attachNotifier({publish(){throw new Error('platform failure');}},false);
+  const state={messages:[message('m0','old')],active:{},detail:{outcome:'succeeded'}};store.api=reminderApi(state);
+  await store.openSession({id:'ses_a',title:'A',directory:'/repo',model:''});
+  state.messages=[message('m0','old'),message('m1','new')];state.active={};
+  store.onFrame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'ses_a',assistantMessageID:'m1',ordinal:0,delta:'x'}})});
+  store.onFrame({data:JSON.stringify({type:'session.idle',data:{sessionID:'ses_a'}})});await store.sync();
+  assert.ok(store.messages.some(item=>item.id==='m1'));assert.equal(store.error,'');
+});
+await test('reminders: denied permission only disables reminders, not the task flow',async()=>{
+  const prefs=notificationsDomain.defaultReminderPrefs();
+  assert.equal(notificationsDomain.shouldPublish(prefs,'completed','disabled'),false);
+  assert.equal(notificationsDomain.shouldPublish(prefs,'approval','unsupported'),false);
+  assert.equal(notificationsDomain.shouldPublish(prefs,'question','enabled'),true);
+  const store=new AppStore();
+  assert.equal(store.foreground,true);store.disconnect();assert.equal(store.reminderQuiet,'');
+});
 console.log(count + ' adapter/state tests passed.');
+
