@@ -2,47 +2,47 @@
   "color": [
     {
       "name": "ui_page",
-      "value": "#F3F5F8"
+      "value": "#F5F5F2"
     },
     {
       "name": "ui_surface",
-      "value": "#FFFFFF"
+      "value": "#FCFCFA"
     },
     {
       "name": "ui_field",
-      "value": "#EDF0F5"
+      "value": "#F0F0EC"
     },
     {
       "name": "ui_sidebar",
-      "value": "#EAF0F8"
+      "value": "#F2F2EF"
     },
     {
       "name": "ui_text",
-      "value": "#18202C"
+      "value": "#15171C"
     },
     {
       "name": "ui_secondary",
-      "value": "#657084"
+      "value": "#5F626A"
     },
     {
       "name": "ui_muted",
-      "value": "#929BAC"
+      "value": "#8B8E95"
     },
     {
       "name": "ui_accent",
-      "value": "#0A59F7"
+      "value": "#2F5BD8"
     },
     {
       "name": "ui_accent_soft",
-      "value": "#E6EFFF"
+      "value": "#E9EDF8"
     },
     {
       "name": "ui_separator",
-      "value": "#E3E7EF"
+      "value": "#E3E3DE"
     },
     {
       "name": "ui_bubble",
-      "value": "#E9EEF6"
+      "value": "#E7E7E2"
     },
     {
       "name": "ui_warning",
@@ -50,19 +50,19 @@
     },
     {
       "name": "ui_warning_bg",
-      "value": "#FFF7E4"
+      "value": "#FFF6E0"
     },
     {
       "name": "ui_danger",
-      "value": "#C33838"
+      "value": "#B04040"
     },
     {
       "name": "ui_danger_bg",
-      "value": "#FDEBEC"
+      "value": "#FDECEF"
     },
     {
       "name": "ui_added",
-      "value": "#E6F4EC"
+      "value": "#E3F4EA"
     },
     {
       "name": "ui_added_text",
@@ -70,27 +70,71 @@
     },
     {
       "name": "ui_removed",
-      "value": "#FBE9EB"
+      "value": "#FBE9EC"
     },
     {
       "name": "ui_removed_text",
-      "value": "#A63346"
+      "value": "#A72F43"
     },
     {
       "name": "ui_code_bg",
-      "value": "#172130"
+      "value": "#12141A"
     },
     {
       "name": "ui_code_text",
-      "value": "#E1E9F6"
+      "value": "#E6EAF2"
     },
     {
       "name": "start_window_background",
-      "value": "#F3F5F8"
+      "value": "#F5F5F2"
     },
     {
       "name": "ui_on_accent",
       "value": "#FFFFFF"
+    },
+    {
+      "name": "ui_btn",
+      "value": "#15171C"
+    },
+    {
+      "name": "ui_btn_text",
+      "value": "#F7F7F4"
+    },
+    {
+      "name": "ui_glass_fill",
+      "value": "#99FFFFFF"
+    },
+    {
+      "name": "ui_glass_strong",
+      "value": "#E6FFFFFF"
+    },
+    {
+      "name": "ui_glass_stroke",
+      "value": "#E6FFFFFF"
+    },
+    {
+      "name": "ui_glass_highlight",
+      "value": "#80FFFFFF"
+    },
+    {
+      "name": "ui_glass_shadow",
+      "value": "#24101828"
+    },
+    {
+      "name": "ui_sheet_scrim",
+      "value": "#4D1A2233"
+    },
+    {
+      "name": "ui_success",
+      "value": "#2E8E63"
+    },
+    {
+      "name": "ui_success_bg",
+      "value": "#E6F5EE"
+    },
+    {
+      "name": "ui_chip",
+      "value": "#F1F1ED"
     }
   ]
 }

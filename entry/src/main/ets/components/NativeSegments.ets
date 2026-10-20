@@ -12,7 +12,9 @@ export struct NativeSegments {
   onSelect: (index: number) => void = (): void => {};
   aboutToAppear(): void {
     this.options = SegmentButtonOptions.tab({ buttons: [{ text: this.first }, { text: this.second }, { text: this.third }],
-      fontColor: C.secondary, selectedFontColor: C.text, backgroundColor: C.field, selectedBackgroundColor: C.surface });
+      fontColor: C.secondary, selectedFontColor: C.text, fontSize: 11.5, selectedFontSize: 11.5,
+      fontWeight: FontWeight.Medium, selectedFontWeight: FontWeight.Medium,
+      backgroundColor: C.field, selectedBackgroundColor: C.bubble });
     this.syncSelection();
   }
   private syncSelection(): void { this.selection = [this.selected]; }
