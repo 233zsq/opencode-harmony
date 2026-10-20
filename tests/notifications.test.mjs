@@ -73,6 +73,7 @@ function makeStore(sink, foreground = true) {
 function apiFor(state) {
   return {
     stream: () => () => {},
+    session: async id => ({ id, title: id, directory: '/repo', status: 'idle', model: '' }),
     messages: async () => ({ data: [], cursor: {} }),
     parseMessages: () => state.messages,
     interactions: async (id, kind) => state.interactions.filter(item => item.kind === kind),
@@ -342,7 +343,8 @@ await test('a different conversation that stops running is reported as completed
   const sink = recordingSink();
   const store = makeStore(sink, true);
   let active = { other: { type: 'running' } };
-  store.api = { request: async path => path === '/api/session/active' ? { data: active } : { data: {} }, pending: async () => [] };
+  store.api = { request: async path => path === '/api/session/active' ? { data: active } : { data: { outcome: 'succeeded', location: { directory: '/other-repo' } } },
+    messages: async () => ({}), parseMessages: () => [message('other_done', 'done')], pending: async () => [] };
   await store.refreshPending();
   assert.equal(sink.events.length, 0, 'a task already running at baseline is not an event');
   active = {};
@@ -429,6 +431,210 @@ await test('completion identity stays the same while a message moves from stream
   const event = { serverID: 'one', directory: '/repo', sessionID: 'ses_a', kind: 'completed', eventID: first };
   assert.equal(ledger.offer(event), true, 'first detection is offered');
   assert.equal(ledger.offer({ ...event, kind: 'completed' }), false, 'state-only resync cannot notify twice');
+});
+
+
+await test('opening an already-running conversation still alerts its eventual completion', async () => {
+  const sink = recordingSink(), store = makeStore(sink, false), state = newState();
+  state.active = { ses_a: { type: 'running' } }; state.detail = {};
+  await openBaseline(store, state, [message('running_at_open', 'working', 'streaming')]);
+  assert.equal(store.working, true);
+  await completeCurrentTask(store, state, 'completed', 'running_at_open');
+  assert.equal(sink.events.length, 1);
+});
+await test('current conversation on a settings page uses a visible system reminder', async () => {
+  const sink = recordingSink(), store = makeStore(sink), state = await openBaseline(store, newState());
+  store.pane = 'settings'; await completeCurrentTask(store, state);
+  assert.equal(sink.events.length, 1); assert.equal(store.reminderQuietSeq, 0);
+});
+await test('SSE transport reconnect seeds recovered interactions instead of notifying old work', async () => {
+  const sink = recordingSink(), store = makeStore(sink, false), state = await openBaseline(store, newState());
+  let ended; store.api.stream = (frame, data, error) => { ended = error; return () => {}; };
+  store.openStream(); ended(new Error('offline'));
+  state.interactions = [{ id: 'old_offline_question', sessionID: 'ses_a', kind: 'form', title: '', fields: [], state: 'pending' }];
+  store.onFrame(sse('server.connected', {})); await store.sync();
+  assert.equal(sink.events.length, 0);
+  state.interactions.push({ id: 'fresh_question', sessionID: 'ses_a', kind: 'form', title: '', fields: [], state: 'pending' });
+  await store.sync(); assert.equal(sink.events.length, 1); assert.equal(sink.events[0].eventID, 'fresh_question');
+});
+await test('return during the short background window suppresses catch-up but preserves later reminders', async () => {
+  const sink = recordingSink(), store = makeStore(sink), state = await openBaseline(store, newState());
+  store.beginBackgroundReminderWindow(20000); store.setActive(true); store.foreground = false;
+  await completeCurrentTask(store, state); assert.equal(sink.events.length, 0);
+  await completeCurrentTask(store, state, 'completed', 'after_resume'); assert.equal(sink.events.length, 1);
+});
+await test('notification resolution cannot mutate another server after its delayed response', async () => {
+  const store = makeStore(recordingSink()); let release;
+  store.api = { session: () => new Promise(resolve => { release = resolve; }) };
+  const opening = store.openNotificationTarget({ serverID: 'one', directory: '/repo', sessionID: 'remote_a', eventID: 'e' });
+  store.disconnect(); store.connected = 'two'; store.directory = '/other'; store.sessionID = 'current_b';
+  store.draft = 'draft B'; store.api = apiFor(newState());
+  release({ id: 'remote_a', title: 'A', directory: '/repo', status: 'idle', model: '' });
+  assert.equal(await opening, false); assert.equal(store.connected, 'two');
+  assert.equal(store.sessionID, 'current_b'); assert.equal(store.directory, '/other'); assert.equal(store.draft, 'draft B');
+});
+await test('missing notification target is resolved before replacing the visible project and draft', async () => {
+  const store = makeStore(recordingSink()); store.sessionID = 'current'; store.draft = 'keep me';
+  store.api = { session: async () => { throw new Error('gone'); } };
+  const opened = await store.openNotificationTarget({ serverID: 'one', directory: '/missing', sessionID: 'gone', eventID: 'e' });
+  assert.equal(opened, false); assert.equal(store.directory, '/repo'); assert.equal(store.sessionID, 'current'); assert.equal(store.draft, 'keep me');
+});
+await test('a disabled reminder group also disables the foreground quiet hint', async () => {
+  const sink = recordingSink(); sink.accepts = () => false;
+  const store = makeStore(sink), state = await openBaseline(store, newState());
+  await completeCurrentTask(store, state); assert.equal(store.reminderQuietSeq, 0); assert.equal(sink.events.length, 0);
+});
+await test('partial reconnect pending reads retain suppression until all old scopes are seeded', async () => {
+  const sink = recordingSink(), store = makeStore(sink); let failing = false, forms = [];
+  store.api = { request: async () => ({ data: {} }), pending: async (d, kind) => {
+    if (failing && kind === 'form') throw new Error('offline'); return kind === 'form' ? forms : [];
+  } };
+  await store.refreshPending(); store.setActive(false); store.active = true; failing = true;
+  await store.refreshPending(); failing = false; forms = [pending('old_after_outage')]; await store.refreshPending();
+  assert.equal(sink.events.length, 0);
+  forms.push(pending('new_after_recovery')); await store.refreshPending(); assert.equal(sink.events.length, 1);
+});
+
+let systemEnabled = false, settingsOpened = 0, permissionRequests = 0;
+let preferenceStore, getPreferences = async () => preferenceStore;
+const permissionAPI = {
+  isNotificationEnabled: async () => systemEnabled,
+  requestEnableNotification: async () => { permissionRequests++; throw Object.assign(new Error('declined'), { code: 1600004 }); },
+  openNotificationSettings: async () => { settingsOpened++; }
+};
+modules.set('@kit.NotificationKit', { notificationManager: permissionAPI });
+modules.set('@kit.ArkData', { preferences: { getPreferences: (...args) => getPreferences(...args) } });
+const { NotificationCenter } = load('entry/src/main/ets/presentation/NotificationCenter.ets', 'notification-center');
+function prefsStore(initial = {}) {
+  const data = { ...initial }; return { data, get: async (key, fallback) => key in data ? data[key] : fallback,
+    put: async (key, value) => { data[key] = value; }, flush: async () => {} };
+}
+await test('permission refresh during startup cannot overwrite saved disabled reminder switches', async () => {
+  preferenceStore = prefsStore({ completed: false, failed: false, pending: false });
+  let release; let calls = 0;
+  getPreferences = async () => ++calls === 1 ? new Promise(resolve => { release = resolve; }) : preferenceStore;
+  const center = new NotificationCenter(); center.attachContext({}); const loading = center.load();
+  await center.refreshPermission(); release(preferenceStore); await loading;
+  assert.equal(center.completed, false); assert.equal(center.failed, false); assert.equal(center.pending, false);
+  assert.equal(preferenceStore.data.completed, false); assert.equal(preferenceStore.data.failed, false);
+});
+await test('first permission rejection ends the action; only the next explicit action opens settings', async () => {
+  preferenceStore = prefsStore(); getPreferences = async () => preferenceStore;
+  permissionRequests = 0; settingsOpened = 0;
+  const center = new NotificationCenter(); center.attachContext({}); await center.load();
+  await center.requestPermission(); assert.equal(permissionRequests, 1); assert.equal(settingsOpened, 0);
+  await center.requestPermission(); assert.equal(permissionRequests, 1); assert.equal(settingsOpened, 1);
+});
+
+
+await test('other-session failures use failure preferences and the confirmed project directory', async () => {
+  const sink = recordingSink(); sink.accepts = kind => kind === 'failed';
+  const store = makeStore(sink); let active = { remote: { type: 'running' } };
+  store.api = { request: async path => path === '/api/session/active' ? { data: active } : { data: { outcome: 'failed', location: { directory: '/second-project' } } },
+    messages: async () => ({}), parseMessages: () => [message('remote_failure', 'error', 'failed')], pending: async () => [] };
+  await store.refreshPending(); active = {}; await store.refreshPending();
+  assert.equal(sink.events.length, 1); assert.equal(sink.events[0].kind, 'failed');
+  assert.equal(sink.events[0].directory, '/second-project');
+  await store.refreshPending(); assert.equal(sink.events.length, 1);
+});
+await test('a task that starts and ends between polls is observed through SSE without a false success', async () => {
+  const sink = recordingSink(), store = makeStore(sink); store.sessionID = 'ses_a';
+  store.api = { request: async path => path === '/api/session/active' ? { data: {} } : { data: { outcome: 'failed', location: { directory: '/remote' } } },
+    messages: async () => ({}), parseMessages: () => [message('quick_failure', 'error', 'failed')], pending: async () => [] };
+  await store.refreshPending();
+  store.onFrame(sse('session.text.delta', { sessionID: 'quick', assistantMessageID: 'quick_failure', ordinal: 0, delta: 'x' }));
+  store.onFrame(sse('session.idle', { sessionID: 'quick' })); await store.refreshPending();
+  assert.equal(sink.events.length, 1); assert.equal(sink.events[0].sessionID, 'quick'); assert.equal(sink.events[0].kind, 'failed');
+});
+await test('a removed active ID without a confirmed terminal outcome is not reported as success', async () => {
+  const sink = recordingSink(), store = makeStore(sink); let active = { unknown: { type: 'running' } };
+  store.api = { request: async path => path === '/api/session/active' ? { data: active } : { data: { location: { directory: '/remote' } } },
+    messages: async () => ({}), parseMessages: () => [], pending: async () => [] };
+  await store.refreshPending(); active = {}; await store.refreshPending();
+  assert.equal(sink.events.length, 0);
+});
+await test('completion readback cannot send a stale reminder after switching connections', async () => {
+  const sink = recordingSink(), store = makeStore(sink); let active = { remote: {} }, release;
+  store.api = { request: async path => path === '/api/session/active' ? { data: active } : new Promise(resolve => { release = resolve; }),
+    messages: async () => ({}), parseMessages: () => [message('remote_done', 'done')], pending: async () => [] };
+  await store.refreshPending(); active = {}; const refreshing = store.refreshPending();
+  while (!release) await Promise.resolve();
+  store.disconnect(); store.connected = 'two'; store.api = apiFor(newState());
+  release({ data: { outcome: 'succeeded', location: { directory: '/remote' } } }); await refreshing;
+  assert.equal(sink.events.length, 0); assert.equal(store.connected, 'two');
+});
+await test('the same task cannot be notified again after moving away from its chat', async () => {
+  const sink = recordingSink(), store = makeStore(sink), state = newState();
+  state.active = { ses_a: {} }; state.detail = {};
+  await openBaseline(store, state, [message('task_one', 'working', 'streaming')]);
+  await store.refreshPending(); await completeCurrentTask(store, state, 'completed', 'task_one');
+  assert.equal(store.reminderQuietSeq, 1); store.sessionID = 'ses_b';
+  store.api.request = async path => path === '/api/session/active' ? { data: {} } : { data: { outcome: 'succeeded', location: { directory: '/repo' } } };
+  store.api.pending = async () => []; await store.refreshPending(); assert.equal(sink.events.length, 0);
+});
+await test('a covered chat uses a system reminder rather than an invisible quiet hint', async () => {
+  const sink = recordingSink(), store = makeStore(sink), state = await openBaseline(store, newState());
+  store.conversationVisible = false; await completeCurrentTask(store, state);
+  assert.equal(sink.events.length, 1); assert.equal(store.reminderQuietSeq, 0);
+});
+await test('failed baseline interaction reads stay quiet until all recovered lists are seeded', async () => {
+  const sink = recordingSink(), store = makeStore(sink, false), state = newState();
+  store.api = apiFor(state); let fail = true;
+  store.api.interactions = async (id, kind) => { if (kind === 'form' && fail) throw new Error('offline'); return kind === 'form' ? state.interactions : []; };
+  await store.openSession({ id: 'ses_a', title: 'A', directory: '/repo', model: '' });
+  fail = false; state.interactions = [{ id: 'old_recovered', sessionID: 'ses_a', kind: 'form', title: '', fields: [], state: 'pending' }];
+  await store.sync(); assert.equal(sink.events.length, 0);
+  state.interactions.push({ id: 'new_question', sessionID: 'ses_a', kind: 'form', title: '', fields: [], state: 'pending' });
+  await store.sync(); assert.equal(sink.events.length, 1);
+});
+
+
+await test('a transient reminder preference read failure never replaces saved disabled switches', async () => {
+  preferenceStore = prefsStore({ completed: false, failed: false, pending: false });
+  const read = preferenceStore.get; let fail = true;
+  preferenceStore.get = async (...args) => { if (fail) { fail = false; throw new Error('temporary read failure'); } return read(...args); };
+  getPreferences = async () => preferenceStore;
+  const center = new NotificationCenter(); center.attachContext({}); await center.load();
+  assert.equal(preferenceStore.data.completed, false); assert.equal(preferenceStore.data.failed, false); assert.equal(preferenceStore.data.pending, false);
+  await center.setGroup('failed', true);
+  assert.equal(preferenceStore.data.failed, true); assert.equal(preferenceStore.data.completed, false); assert.equal(preferenceStore.data.pending, false);
+});
+await test('a notification connect superseded by user navigation cannot replace the selected session', async () => {
+  const { Protocol } = modules.get('../data/Protocol'); const proto = Protocol.prototype;
+  const names = ['request', 'projects', 'stream', 'messages', 'parseMessages', 'interactions', 'session'];
+  const originals = Object.fromEntries(names.map(name => [name, proto[name]]));
+  try {
+    proto.request = async path => path === '/api/info' ? { version: '2.0.29' } : path.endsWith('/inbox') ? { data: [] } : { data: {} };
+    proto.projects = async () => []; proto.stream = () => () => {};
+    proto.messages = async () => ({ data: [] }); proto.parseMessages = () => []; proto.interactions = async () => [];
+    proto.session = async id => ({ id, title: id, directory: '/repo', model: '', status: 'idle' });
+    const store = makeStore(recordingSink());
+    store.servers.push({ id: 'two', name: 'Two', url: 'https://two.example', username: 'opencode', allowHttp: false });
+    let release; store.storage.last = () => new Promise(resolve => { release = resolve; });
+    const opening = store.openNotificationTarget({ serverID: 'two', directory: '/repo', sessionID: 'notification_task', eventID: 'e' });
+    while (!release) await Promise.resolve();
+    await store.openSession({ id: 'user_selected', title: 'User selected', directory: '', model: '', status: 'idle' });
+    release([]); assert.equal(await opening, false); assert.equal(store.sessionID, 'user_selected'); assert.equal(store.connected, 'two');
+  } finally { Object.assign(proto, originals); }
+});
+
+
+await test('a successful notification connection may restore its remembered project before opening the target', async () => {
+  const { Protocol } = modules.get('../data/Protocol'); const proto = Protocol.prototype;
+  const names = ['request', 'projects', 'stream', 'messages', 'parseMessages', 'interactions', 'session', 'sessionPage', 'models', 'agents'];
+  const originals = Object.fromEntries(names.map(name => [name, proto[name]]));
+  try {
+    proto.request = async path => path === '/api/info' ? { version: '2.0.29' } : path.endsWith('/inbox') ? { data: [] } : { data: {} };
+    proto.projects = async () => []; proto.stream = () => () => {};
+    proto.messages = async () => ({ data: [] }); proto.parseMessages = () => []; proto.interactions = async () => [];
+    proto.session = async id => ({ id, title: id, directory: '/repo', model: '', status: 'idle' });
+    proto.sessionPage = async () => ({ sessions: [], cursor: '' }); proto.models = async () => []; proto.agents = async () => [];
+    const store = makeStore(recordingSink());
+    store.servers.push({ id: 'two', name: 'Two', url: 'https://two.example', username: 'opencode', allowHttp: false });
+    store.storage.last = async () => ['/repo', 'remembered'];
+    assert.equal(await store.openNotificationTarget({ serverID: 'two', directory: '/repo', sessionID: 'notification_task', eventID: 'e' }), true);
+    assert.equal(store.sessionID, 'notification_task'); assert.equal(store.directory, '/repo'); assert.equal(store.connected, 'two'); assert.equal(store.busy, false);
+  } finally { Object.assign(proto, originals); }
 });
 
 console.log(count + ' notification tests passed.');

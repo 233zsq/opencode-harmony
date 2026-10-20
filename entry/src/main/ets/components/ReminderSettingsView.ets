@@ -35,6 +35,7 @@ export struct ReminderSettingsView {
   @Prop permission: string = 'unknown';
   @Prop ready: boolean = false;
   @Prop requesting: boolean = false;
+  @Prop permissionRequested: boolean = false;
   @Prop notice: string = '';
   onToggle: (group: string, enabled: boolean) => void = (group: string, enabled: boolean): void => {};
   onRequest: () => void = (): void => {};
@@ -56,7 +57,7 @@ export struct ReminderSettingsView {
 
   private requestLabel(): string {
     if (this.requesting) { return '正在申请…'; }
-    return this.permission === 'disabled' ? '打开系统通知设置' : '申请通知权限';
+    return this.permissionRequested ? '打开系统通知设置' : '申请通知权限';
   }
 
   @Builder
@@ -103,10 +104,10 @@ export struct ReminderSettingsView {
           }.width('100%')
           if (this.permission !== 'enabled' && this.permission !== 'unsupported') {
             Button(this.requestLabel(), { type: ButtonType.Normal }).id('reminder-request')
-              .width('100%').height(40).fontSize(12.5).fontWeight(FontWeight.Medium)
+              .width('100%').constraintSize({ minHeight: 40 }).fontSize(12.5).fontWeight(FontWeight.Medium)
               .backgroundColor(C.btn).fontColor(C.btn_text).borderRadius(9)
               .enabled(this.ready && !this.requesting)
-              .accessibilityText(this.permission === 'disabled' ? '打开系统通知设置' : '申请通知权限')
+              .accessibilityText(this.permissionRequested ? '打开系统通知设置' : '申请通知权限')
               .onClick((): void => { this.onRequest(); })
           }
           Text('申请后请在系统弹窗或通知设置中选择允许。拒绝或撤销权限只影响提醒，不影响聊天、审批和任务执行。')
@@ -133,5 +134,3 @@ export struct ReminderSettingsView {
       .backgroundColor(Color.Transparent).scrollBar(BarState.Off)
   }
 }
-
-

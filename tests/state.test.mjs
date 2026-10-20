@@ -540,7 +540,7 @@ await test('a successful model switch clears previous errors while a rejected sw
  store.api.request=async()=>{throw new protocol.ApiError(400,'Unsupported model');};await store.chooseModel('p/bad');assert.equal(store.modelID,'p/new');assert.match(store.error,/Unsupported/);
 });
 const reminderSink=()=>{const events=[];return{events,publish(event){events.push(event);}};};
-const reminderApi=state=>({stream:()=>()=>{},messages:async()=>({data:[],cursor:{}}),parseMessages:()=>state.messages,
+const reminderApi=state=>({stream:()=>()=>{},session:async id=>({id,title:id,directory:'/repo',status:'idle',model:''}),messages:async()=>({data:[],cursor:{}}),parseMessages:()=>state.messages,
   interactions:async()=>[],request:async path=>path==='/api/session/active'?{data:state.active}:path.endsWith('/inbox')?{data:[]}:{data:state.detail}});
 await test('reminders: initial history stays quiet and one completion alerts once',async()=>{
   const sink=reminderSink();const store=new AppStore();store.connected='one';store.directory='/repo';store.active=true;store.attachNotifier(sink,false);

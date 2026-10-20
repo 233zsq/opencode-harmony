@@ -2,7 +2,7 @@ import { common, wantAgent, Want, WantAgent } from '@kit.AbilityKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { preferences } from '@kit.ArkData';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { TaskNotification, TaskNotifySink, NotificationTarget, ReminderPrefs, ReminderPermission, ReminderGroup,
+import { TaskNotification, TaskNotifySink, NotificationTarget, ReminderPrefs, ReminderPermission, ReminderGroup, NotificationKind,
   notificationTarget, notificationWantParameters, notificationContent, notificationId, notificationLabel, notificationGroup,
   shouldPublish, normalizeReminderPermission,
   REMINDER_STORAGE_NAME, REMINDER_KEY_COMPLETED, REMINDER_KEY_FAILED, REMINDER_KEY_PENDING, REMINDER_KEY_PERMISSION,
@@ -20,11 +20,13 @@ export class NotificationCenter implements TaskNotifySink {
   permission: ReminderPermission = 'unknown';
   ready: boolean = false;
   requesting: boolean = false;
+  permissionRequested: boolean = false;
   // Internal diagnostic status only; never rendered as raw platform errors.
   lastError: string = '';
   private context: common.UIAbilityContext | undefined = undefined;
   private store: preferences.Preferences | undefined = undefined;
   private slotReady: boolean = false;
+  private loading: Promise<void> | undefined = undefined;
 
   attachContext(context: common.UIAbilityContext): void { this.context = context; }
 
@@ -36,7 +38,11 @@ export class NotificationCenter implements TaskNotifySink {
     return this.ready && this.permission === 'enabled' && (this.completed || this.failed || this.pending);
   }
 
-  async load(): Promise<void> {
+  load(): Promise<void> {
+    if (this.loading === undefined) { this.loading = this.loadPreferences(); }
+    return this.loading;
+  }
+  private async loadPreferences(): Promise<void> {
     if (this.store === undefined) { await this.openStore(); }
     const store = this.store;
     if (store) {
@@ -44,6 +50,7 @@ export class NotificationCenter implements TaskNotifySink {
         this.completed = await store.get(REMINDER_KEY_COMPLETED, true) as boolean;
         this.failed = await store.get(REMINDER_KEY_FAILED, true) as boolean;
         this.pending = await store.get(REMINDER_KEY_PENDING, true) as boolean;
+        this.permissionRequested = await store.get('permissionRequested', false) as boolean;
         this.permission = normalizeReminderPermission(await store.get(REMINDER_KEY_PERMISSION, 'unknown') as string);
       } catch (_) { this.lastError = '提醒设置暂时无法读取，先使用本次运行的默认值'; }
     }
@@ -59,20 +66,24 @@ export class NotificationCenter implements TaskNotifySink {
   }
 
   async setGroup(group: ReminderGroup, enabled: boolean): Promise<void> {
+    if (!this.ready) { await this.load(); }
     if (group === 'completed') { this.completed = enabled; }
     else if (group === 'failed') { this.failed = enabled; }
     else { this.pending = enabled; }
-    await this.persist();
+    await this.persist(group);
   }
 
-  private async persist(): Promise<void> {
+  private async persist(group?: ReminderGroup): Promise<void> {
+    // Startup permission checks may overlap loading. Never write defaults over saved choices.
+    if (!this.ready) { return; }
     if (this.store === undefined) { await this.openStore(); }
     const store = this.store;
     if (!store) { return; }
     try {
-      await store.put(REMINDER_KEY_COMPLETED, this.completed);
-      await store.put(REMINDER_KEY_FAILED, this.failed);
-      await store.put(REMINDER_KEY_PENDING, this.pending);
+      // Permission refreshes must never write reminder switches, including after
+      // a transient read failure. Only an explicit toggle writes its own group.
+      if (group !== undefined) { await store.put(group, this.currentPrefs()[group]); }
+      await store.put('permissionRequested', this.permissionRequested);
       await store.put(REMINDER_KEY_PERMISSION, this.permission);
       await store.flush();
     } catch (_) { this.lastError = '提醒开关未能保存，请稍后重试'; }
@@ -96,13 +107,15 @@ export class NotificationCenter implements TaskNotifySink {
     this.requesting = true;
     try {
       const current = await this.refreshPermission();
-      if (current === 'enabled' || !this.context) { return this.permission; }
-      try { await notificationManager.requestEnableNotification(this.context); }
-      catch (_) {
-        // The system dialog can only be shown once. After a rejection (or when
-        // notifications are disabled) guide the user to the settings page.
+      if (current === 'enabled' || current === 'unsupported' || !this.context) { return this.permission; }
+      if (this.permissionRequested) {
+        // Opening settings is a separate, explicit action after a prior request.
         try { await notificationManager.openNotificationSettings(this.context); }
-        catch (_) { /* capability may be unavailable on this device */ }
+        catch (_) { this.lastError = '通知设置暂时无法打开，请稍后重试'; }
+      } else {
+        this.permissionRequested = true; await this.persist();
+        try { await notificationManager.requestEnableNotification(this.context); }
+        catch (_) { /* a rejection ends this action; never open a second dialog */ }
       }
       await this.refreshPermission();
     } catch (_) { /* permission is best effort and never blocks the app */ }
@@ -110,6 +123,10 @@ export class NotificationCenter implements TaskNotifySink {
     return this.permission;
   }
 
+  accepts(kind: NotificationKind): boolean {
+    const group: ReminderGroup = kind === 'completed' ? 'completed' : kind === 'failed' ? 'failed' : 'pending';
+    return this.ready && this.currentPrefs()[group];
+  }
   publish(event: TaskNotification): void {
     if (!shouldPublish(this.currentPrefs(), event.kind, this.permission)) { return; }
     if (!this.context) { return; }
@@ -134,6 +151,7 @@ export class NotificationCenter implements TaskNotifySink {
       };
       const agent = await this.buildWantAgent(event);
       if (agent) { request.wantAgent = agent; }
+      if (!shouldPublish(this.currentPrefs(), event.kind, this.permission)) { return; }
       await notificationManager.publish(request);
       this.lastError = '';
     } catch (error) {
@@ -188,6 +206,3 @@ export class NotificationCenter implements TaskNotifySink {
     return '提醒暂未显示';
   }
 }
-
-
-

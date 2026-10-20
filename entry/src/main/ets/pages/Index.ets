@@ -39,6 +39,7 @@ struct Index {
   @State quietNotice: string = '';
   private quietSeq: number = 0;
   private consumingLaunch: boolean = false;
+  private appReady: boolean = false;
   private pendingLaunch: NotificationTarget | undefined = undefined;
   @State follow: boolean = true;
   @State switchingModel: boolean = false;
@@ -130,8 +131,8 @@ struct Index {
   }
   @StorageLink('appearanceMode') appearanceMode: string = 'system';
   @StorageLink('appearanceDark') darkAppearance: boolean = false;
-  @State sidebarOpen: boolean = false;
-  @State wide: boolean = false;
+  @State @Watch('conversationVisibilityChanged') sidebarOpen: boolean = false;
+  @State @Watch('conversationVisibilityChanged') wide: boolean = false;
   @State viewportWidth: number = 400;
   @State sessionSearch: string = '';
   @State pendingFilter: number = 0;
@@ -140,7 +141,7 @@ struct Index {
   private viewMessages: ChatMessage[] = [];
   private viewInteractions: Interaction[] = [];
   private scrollTimer: number = -1;
-  @State toolSheetOpen: boolean = false;
+  @State @Watch('conversationVisibilityChanged') toolSheetOpen: boolean = false;
   @State sheetKind: string = 'tool';
   @State selectedTool: ToolItem = { id: '', name: '', status: '', input: '', output: '' };
   @State reasoningOpen: string[] = [];
@@ -160,7 +161,7 @@ struct Index {
       this.reminders.attachContext(ability);
       this.reminders.load();
       this.store.attachNotifier(this.reminders, this.foreground);
-      this.store.init(context as common.Context).then((): void => { this.consumeNotificationLaunch(); });
+      this.store.init(context as common.Context).then((): void => { this.appReady = true; this.consumeNotificationLaunch(); this.tryConsumeLaunch(); });
     }
   }
   aboutToDisappear(): void { if (this.scrollTimer >= 0) { clearTimeout(this.scrollTimer); this.scrollTimer = -1; } this.store.setActive(false); }
@@ -196,6 +197,7 @@ struct Index {
     const route = this.store.pane;
     this.navigation.pushPath({ name: route, param: route });
   }
+  private conversationVisibilityChanged(): void { this.store.conversationVisible = (!this.sidebarOpen || this.wide) && !this.toolSheetOpen; }
   private showActions(): void { this.openSheet('actions'); }
   private dismissKeyboard(): void { try { this.getUIContext().getFocusController().clearFocus(); } catch (_) { } }
   private openSheet(kind: string): void { this.dismissKeyboard(); this.sheetKind = kind; this.toolSheetOpen = true; }
@@ -269,9 +271,9 @@ struct Index {
     this.notificationLaunch = ''; this.pendingLaunch = target; this.tryConsumeLaunch();
   }
   private tryConsumeLaunch(): void {
-    const target = this.pendingLaunch; if (!target || this.consumingLaunch || !this.store.servers.length) { return; }
+    const target = this.pendingLaunch; if (!target || !this.appReady || this.consumingLaunch || this.store.busy || this.store.targetBusy || !this.store.servers.length) { return; }
     this.pendingLaunch = undefined; this.consumingLaunch = true; this.follow = true;
-    this.store.openNotificationTarget(target).finally((): void => { this.consumingLaunch = false; });
+    this.store.openNotificationTarget(target).finally((): void => { this.consumingLaunch = false; this.tryConsumeLaunch(); });
   }
   private reminderQuietText(kind: string): string {
     if (kind === 'completed') { return '当前会话任务已完成'; }
@@ -1132,6 +1134,7 @@ struct Index {
   reminderSettings() {
     ReminderSettingsView({ completed: this.reminders.completed, failed: this.reminders.failed, pending: this.reminders.pending,
       permission: this.reminders.permission, ready: this.reminders.ready, requesting: this.reminders.requesting,
+      permissionRequested: this.reminders.permissionRequested,
       notice: this.reminders.lastError,
       onToggle: (group: string, enabled: boolean): void => { this.reminders.setGroup(group as ReminderGroup, enabled); },
       onRequest: (): void => { this.reminders.requestPermission(); } })
@@ -1283,23 +1286,3 @@ struct Index {
       })
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

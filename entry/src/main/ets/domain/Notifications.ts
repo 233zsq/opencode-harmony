@@ -30,11 +30,13 @@ export interface NotificationTarget {
 
 export interface TaskNotifySink {
   publish(event: TaskNotification): void;
+  accepts?(kind: NotificationKind): boolean;
 }
 
 // AppStore keeps this by default; the Index page injects the real
 // NotificationCenter once and the Node state tests inject a recording fake.
 export class NoopTaskNotifier implements TaskNotifySink {
+  accepts(kind: NotificationKind): boolean { return false; }
   publish(event: TaskNotification): void {}
 }
 
@@ -91,6 +93,14 @@ export function notificationContent(event: TaskNotification): NotificationText {
 // even when its state changes from streaming to completed between syncs.
 export function completionEventID(messageID: string, sessionID: string): string {
   return messageID ? 'idle:' + messageID : 'idle:' + sessionID;
+}
+
+// Completion and failure must come from confirmed terminal state, not absence
+// from the running list alone. A failed message overrides a stale outcome.
+export function taskNotificationKind(outcome: string, assistantState: string = ''): NotificationKind | undefined {
+  if (assistantState === 'failed' || outcome === 'failed' || outcome === 'interrupted') { return 'failed'; }
+  if (outcome === 'succeeded' || (!outcome && assistantState === 'completed')) { return 'completed'; }
+  return undefined;
 }
 
 export function pendingNotificationKind(pendingKind: string): NotificationKind {

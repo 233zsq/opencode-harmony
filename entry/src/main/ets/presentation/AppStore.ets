@@ -11,7 +11,7 @@ import { Protocol, ApiError, parseUsage, parseCompactRecord, object, string, row
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
   DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
 import { TaskNotification, TaskNotifySink, NoopTaskNotifier, NotificationLedger, NotificationKind, NotificationTarget,
-  pendingNotificationKind, completionEventID, isQuietReminder } from '../domain/Notifications';
+  pendingNotificationKind, completionEventID, taskNotificationKind, isQuietReminder } from '../domain/Notifications';
 
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
@@ -169,6 +169,7 @@ export class AppStore {
   private initialized: boolean = false;
   taskNotifier: TaskNotifySink = new NoopTaskNotifier();
   foreground: boolean = true;
+  conversationVisible: boolean = true;
   reminderQuiet: string = '';
   reminderQuietSeq: number = 0;
   targetBusy: boolean = false;
@@ -328,7 +329,8 @@ export class AppStore {
         const active = object(object(await api.request('/api/session/active'))['data']);
         if (api !== this.api || epoch !== this.pendingEpoch) { return; }
         this.runningSessions = Object.keys(active); this.runningUnknown = false;
-        this.detectSessionCompletions(this.runningSessions);
+        await this.detectSessionCompletions(this.runningSessions, api, epoch);
+        if (api !== this.api || epoch !== this.pendingEpoch) { return; }
       } catch (e) {
         if (api !== this.api || epoch !== this.pendingEpoch) { return; }
         this.runningUnknown = true; errors.push('运行状态读取失败');
@@ -382,13 +384,11 @@ export class AppStore {
     }
     return undefined;
   }
-  private sessionDirectory(sessionID: string): string {
-    return this.sessions.find((item: SessionItem) => item.id === sessionID)?.directory || this.directory;
-  }
-  private completionEvent(): TaskNotification | undefined {
+  private completionEvent(outcome: string = ''): TaskNotification | undefined {
     if (!this.connected || !this.sessionID) { return undefined; }
     const last = this.lastAssistantMessage();
-    const kind: NotificationKind = last && last.state === 'failed' ? 'failed' : 'completed';
+    const kind = taskNotificationKind(outcome, last?.state || '');
+    if (!kind || (last?.state === 'streaming' && kind !== 'failed')) { return undefined; }
     // A single completion identity per assistant message. The message state can
     // move from streaming to completed between two syncs; including it would
     // create a second notification for the same finished task.
@@ -410,28 +410,30 @@ export class AppStore {
   private dispatchReminder(event: TaskNotification): void {
     if (!event.serverID || !event.sessionID) { return; }
     if (!this.notificationLedger.offer(event)) { return; }
-    if (isQuietReminder(event, this.sessionID, this.foreground)) {
+    if (this.taskNotifier.accepts?.(event.kind) === false) { return; }
+    if (this.pane === 'chat' && this.conversationVisible && event.directory === this.directory &&
+      isQuietReminder(event, this.sessionID, this.foreground)) {
       this.reminderQuiet = event.kind; this.reminderQuietSeq = this.reminderQuietSeq + 1; return;
     }
     try { this.taskNotifier.publish(event); } catch (_) { /* a reminder never breaks chat */ }
   }
-  private seedReminderBaseline(): void {
-    const completion = this.completionEvent();
+  private seedReminderBaseline(outcome: string): void {
+    // A running assistant is not an already-completed historical task.
+    const completion = this.working ? undefined : this.completionEvent(outcome);
     if (completion) { this.notificationLedger.markSeen(completion); }
     this.interactions.forEach((item: Interaction) => {
       if (item.state !== 'submitting') { this.notificationLedger.markSeen(this.interactionEvent(this.sessionID, item)); }
     });
     this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
   }
-  private finishReminderSync(): void {
+  private finishReminderSync(outcome: string, interactionsSynced: boolean): void {
     if (this.readingHistory) { return; }
     const suppress = this.notifyBaseline || this.syncSuppressNotify;
-    this.notifyBaseline = false; this.syncSuppressNotify = false;
-    if (suppress) { this.seedReminderBaseline(); this.taskIdlePending = false; return; }
+    if (interactionsSynced) { this.notifyBaseline = false; this.syncSuppressNotify = false; }
+    if (suppress) { this.seedReminderBaseline(outcome); this.taskIdlePending = false; return; }
     if (this.taskIdlePending && !this.working) {
-      this.taskIdlePending = false;
-      const completion = this.completionEvent();
-      if (completion) { this.dispatchReminder(completion); }
+      const completion = this.completionEvent(outcome);
+      if (completion) { this.taskIdlePending = false; this.dispatchReminder(completion); }
     }
   }
   // Only interactions that are still pending after a normal sync are announced.
@@ -455,59 +457,84 @@ export class AppStore {
     }
     if (this.pendingSuppressNotify) {
       this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
-      this.pendingSuppressNotify = false; return;
+      if (!failed) { this.pendingSuppressNotify = false; }
+      return;
     }
     this.pendingItems.forEach((item: PendingItem) => { if (!item.stale) { this.dispatchReminder(this.pendingEvent(item)); } });
   }
-  // Foreground other conversations: when /api/session/active stops listing a
-  // session the client had observed running, that task has ended. The exact
-  // failure state is unknown without reading that transcript, so it is reported
-  // as completed; the conversation itself still shows the real failure.
-  private detectSessionCompletions(ids: string[]): void {
-    const next = new Set<string>();
-    ids.forEach((id: string) => { next.add(id); });
-    next.forEach((id: string) => {
-      if (!this.runningTokens.has(id)) {
-        this.runningTokenSeq = this.runningTokenSeq + 1; this.runningTokens.set(id, this.runningTokenSeq);
+  // A disappearing running ID is only a candidate. Confirm the terminal outcome
+  // and message identity before deciding the category and deep-link directory.
+  private async detectSessionCompletions(ids: string[], api: Protocol, epoch: number): Promise<void> {
+    const next = new Set<string>(ids);
+    ids.slice(0, 500).forEach((id: string) => {
+      if (!this.runningTokens.has(id) && this.runningTokens.size < 500) {
+        this.runningTokenSeq++; this.runningTokens.set(id, this.runningTokenSeq);
       }
     });
     const suppress = this.pendingBaseline || this.pendingSuppressNotify;
-    const previous: string[] = Array.from(this.runningTokens.keys());
+    const previous = Array.from(this.runningTokens.keys());
+    const ended: string[] = [];
     previous.forEach((id: string) => {
       if (next.has(id)) { return; }
-      const token = this.runningTokens.get(id) || 0;
-      this.runningTokens.delete(id);
-      if (suppress || !this.connected || id === this.sessionID) { return; }
-      this.dispatchReminder({ serverID: this.connected, directory: this.sessionDirectory(id), sessionID: id,
-        kind: 'completed', eventID: 'idle:' + String(token) });
+      if (suppress || id === this.sessionID) { this.runningTokens.delete(id); }
+      else { ended.push(id); }
     });
+    // Bound both retained candidates and concurrent terminal-state reads.
+    for (let i = 0; i < ended.length; i += 4) {
+      if (api !== this.api || epoch !== this.pendingEpoch) { return; }
+      await Promise.all(ended.slice(i, i + 4).map((id: string): Promise<void> => this.confirmSessionCompletion(api, epoch, id)));
+    }
+  }
+  private async confirmSessionCompletion(api: Protocol, epoch: number, id: string): Promise<void> {
+    const server = this.connected; const token = this.runningTokens.get(id);
+    try {
+      const detail = object(object(await api.request('/api/session/' + encodeURIComponent(id)))['data']);
+      const response = await api.messages(id);
+      if (api !== this.api || server !== this.connected || epoch !== this.pendingEpoch ||
+        token !== this.runningTokens.get(id) || this.runningSessions.indexOf(id) >= 0) { return; }
+      const last = api.parseMessages(response).filter((item: ChatMessage) => item.role === 'assistant').pop();
+      const kind = taskNotificationKind(string(detail['outcome']), last?.state || '');
+      if (!kind || (last?.state === 'streaming' && kind !== 'failed')) { return; }
+      const directory = string(object(detail['location'])['directory']);
+      if (!directory) { return; }
+      this.runningTokens.delete(id);
+      const event: TaskNotification = { serverID: server, directory: directory, sessionID: id, kind: kind,
+        eventID: completionEventID(last?.id || 'turn:' + String(token), id) };
+      if (this.pendingSuppressNotify || this.pendingBaseline) { this.notificationLedger.markSeen(event); }
+      else { this.dispatchReminder(event); }
+    } catch (_) { /* retain the bounded candidate for a later successful read */ }
   }
   // Deep link from a system notification. It reuses the normal safe navigation:
   // the current draft is stashed first, a different server is connected through
   // the existing flow, then the project and session are opened.
   async openNotificationTarget(target: NotificationTarget): Promise<boolean> {
-    if (this.targetBusy || !target || !target.serverID || !target.sessionID) { return false; }
+    if (this.targetBusy || this.busy || !target || !target.serverID || !target.sessionID) { return false; }
     this.targetBusy = true; this.error = '';
+    let api = this.api;
     try {
       const server = this.servers.find((item: ServerConfig) => item.id === target.serverID);
       if (!server) { this.error = '提醒对应的服务器已从本机移除，请在连接页重新添加。'; return false; }
       if (this.connected !== target.serverID) {
-        await this.connect(server);
-        if (this.connected !== target.serverID) { return false; }
+        const connectedGeneration = await this.connect(server);
+        if (connectedGeneration === undefined || connectedGeneration !== this.generation ||
+          this.connected !== target.serverID || this.busy) { return false; }
       }
-      if (!this.api) { return false; }
-      const directory = target.directory || this.directory;
+      api = this.api;
+      if (!api) { return false; }
+      const generation = this.generation;
+      // Resolve first: a removed session must not replace the current project.
+      const session = await api.session(target.sessionID);
+      if (api !== this.api || generation !== this.generation || this.connected !== target.serverID ||
+        !session || session.id !== target.sessionID) { return false; }
+      const directory = session.directory || target.directory || this.directory;
       if (directory && directory !== this.directory) {
         await this.selectProject(directory);
-        if (this.directory !== directory || this.sessionsError) { return false; }
+        if (api !== this.api || this.generation !== generation + 1 || this.connected !== target.serverID ||
+          this.directory !== directory || this.sessionsError) { return false; }
       }
-      if (this.connected !== target.serverID) { return false; }
-      const known = this.sessions.find((item: SessionItem) => item.id === target.sessionID);
-      const session = known || await this.api.session(target.sessionID);
-      if (!session || session.id !== target.sessionID) { return false; }
       await this.openSession(session);
-      return this.connected === target.serverID && this.sessionID === target.sessionID;
-    } catch (e) { this.fail(e as Error); return false; }
+      return api === this.api && this.connected === target.serverID && this.sessionID === target.sessionID;
+    } catch (e) { if (api === this.api) { this.fail(e as Error); } return false; }
     finally { this.targetBusy = false; }
   }
   async reconnect(): Promise<void> {
@@ -605,10 +632,11 @@ export class AppStore {
     this.resetSessionControl(); this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false;
     this.notificationLedger = new NotificationLedger(); this.notifyBaseline = false; this.syncSuppressNotify = false;
     this.pendingBaseline = true; this.pendingSuppressNotify = false; this.taskIdlePending = false; this.runningTokens = new Map<string, number>();
-    this.reminderQuiet = ''; this.reminderQuietSeq = 0; this.targetBusy = false; return true;
+    this.cancelBackgroundReminderWindow();
+    this.reminderQuiet = ''; this.reminderQuietSeq = 0; return true;
   }
-  async connect(config: ServerConfig): Promise<void> {
-    if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true;
+  async connect(config: ServerConfig): Promise<number | undefined> {
+    if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true; let ownedGeneration = generation;
     try {
       const password = await this.storage.secret(config.id);
       if (generation !== this.generation) { return; }
@@ -635,14 +663,21 @@ export class AppStore {
       if (generation !== this.generation) { return; }
       if (last.length > 0 && last[0]) {
         await this.selectProject(last[0]);
-        if (api !== this.api || this.sessionsError) { return; }
+        ownedGeneration++;
+        if (api !== this.api || ownedGeneration !== this.generation || this.sessionsError) { return; }
         if (last[1]) {
           const session = this.sessions.find((s: SessionItem) => s.id === last[1]) || await api.session(last[1]);
-          if (api === this.api && session.directory === this.directory) { await this.openSession(session); }
+          if (api !== this.api || ownedGeneration !== this.generation) { return; }
+          if (session.directory === this.directory) {
+            await this.openSession(session); ownedGeneration++;
+            if (api !== this.api || ownedGeneration !== this.generation || this.sessionID !== session.id) { return; }
+          }
         }
       }
+      return api === this.api && ownedGeneration === this.generation ? ownedGeneration : undefined;
     } catch (e) { if (generation === this.generation) { this.status = '连接失败'; this.fail(e as Error); } }
     finally { if (generation === this.generation) { this.busy = false; } }
+    return undefined;
   }
   private stopNetwork(): void {
     this.streamEpoch++;
@@ -653,6 +688,7 @@ export class AppStore {
     if (this.refreshTimer >= 0) { clearTimeout(this.refreshTimer); this.refreshTimer = -1; }
   }
   setActive(active: boolean): void {
+    if (active && !this.foreground) { this.suppressNotificationCatchUp(); }
     this.active = active; this.providers.setActive(active); this.foreground = active;
     if (!active) {
       this.suppressNotificationCatchUp();
@@ -674,6 +710,7 @@ export class AppStore {
       if (error instanceof ApiError && (error.code === 401 || error.code === 403 || error.code === 495)) {
         this.networkBlocked = true; this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.error = error.message; this.stopNetwork(); return;
       }
+      this.suppressNotificationCatchUp();
       this.status = '重新连接中'; this.attempts++;
       if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); }
       this.retryTimer = setTimeout(() => { this.retryTimer = -1; this.openStream(); },
@@ -686,11 +723,19 @@ export class AppStore {
     const type = string(event['type']); const id = string(event['id']);
     if (id && this.eventIDs.indexOf(id) >= 0) { return; }
     if (id) { this.eventIDs.push(id); if (this.eventIDs.length > 4096) { this.eventIDs.shift(); } }
-    if (type === 'server.connected') { this.status = '实时连接'; this.attempts = 0; this.queueSync(); return; }
+    if (type === 'server.connected') {
+      if (this.attempts > 0) { this.suppressNotificationCatchUp(); }
+      this.status = '实时连接'; this.attempts = 0; this.queueSync(); return;
+    }
     const location = string(object(event['location'])['directory']);
     const data = object(event['data']); const sessionID = string(data['sessionID'], string(object(data['form'])['sessionID']));
     if (sessionID && type === 'session.idle') { this.runningSessions = this.runningSessions.filter((id: string) => id !== sessionID); }
-    else if (sessionID && /^session\.(text|reasoning)\./.test(type) && this.runningSessions.indexOf(sessionID) < 0) { this.runningSessions = this.runningSessions.concat([sessionID]); }
+    else if (sessionID && /^session\.(text|reasoning)\./.test(type)) {
+      if (this.runningSessions.indexOf(sessionID) < 0) { this.runningSessions = this.runningSessions.concat([sessionID]); }
+      if (!this.runningTokens.has(sessionID) && this.runningTokens.size < 500) {
+        this.runningTokenSeq++; this.runningTokens.set(sessionID, this.runningTokenSeq);
+      }
+    }
     if (/^(form\.|permission\.|session\.(idle|created|updated|removed))/.test(type)) { this.queueWorkspace(); }
     if (location && location !== this.directory) { return; }
     if (!sessionID || sessionID !== this.sessionID) { return; }
@@ -808,8 +853,8 @@ export class AppStore {
         if (generation !== this.generation) { return; }
         if (confirmed && this.pendingSend?.id === pending.id) { this.pendingSend = undefined; this.draft = ''; this.attachments = []; if (this.error.indexOf('发送结果待核对') >= 0) { this.error = ''; } this.clearSavedDraft(); }
       }
-      await this.syncInteractions(api, id, 'form', generation);
-      await this.syncInteractions(api, id, 'permission', generation);
+      const formsSynced = await this.syncInteractions(api, id, 'form', generation);
+      const permissionsSynced = await this.syncInteractions(api, id, 'permission', generation);
       const active = object(object(await api.request('/api/session/active'))['data']);
       const usageEpoch = ++this.usageEpoch; const detail = object(object(await api.request('/api/session/' + encodeURIComponent(id)))['data']);
       const inbox = rows(await api.request('/api/session/' + encodeURIComponent(id) + '/inbox'));
@@ -831,7 +876,7 @@ export class AppStore {
           if (model['id']) { this.modelID = string(model['providerID']) + '/' + string(model['id']); }
           else { this.modelID = this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; }
         }
-        this.finishReminderSync();
+        this.finishReminderSync(string(detail['outcome']), formsSynced && permissionsSynced);
       }
     } catch (e) {
       if (generation === this.generation) {
@@ -846,11 +891,11 @@ export class AppStore {
       }
     }
   }
-  private async syncInteractions(api: Protocol, id: string, kind: string, generation: number): Promise<void> {
+  private async syncInteractions(api: Protocol, id: string, kind: string, generation: number): Promise<boolean> {
     const epoch = kind === 'permission' ? ++this.permissionEpoch : 0;
     try {
       const incoming = await api.interactions(id, kind, this.directory);
-      if (generation !== this.generation || (kind === 'permission' && epoch !== this.permissionEpoch)) { return; }
+      if (generation !== this.generation || (kind === 'permission' && epoch !== this.permissionEpoch)) { return false; }
       const savedForms = this.conversationMemory.read(this.connected, this.directory, id).forms || [];
       const next = incoming.map((item: Interaction): Interaction => {
         const old = this.interactions.find((p: Interaction) => p.id === item.id);
@@ -864,11 +909,13 @@ export class AppStore {
       if (JSON.stringify(this.interactions) !== JSON.stringify(combined)) { this.interactions = combined; }
       if (kind === 'permission') { this.permissionError = ''; }
       this.detectInteractionNotifications(id, next);
+      return true;
     } catch (e) {
       if (generation === this.generation && (kind !== 'permission' || epoch === this.permissionEpoch)) {
         if (kind === 'permission') { this.permissionError = '审批列表读取失败，已保留上次结果。请重新读取后再批准；仍可拒绝已显示的请求。'; }
         else { this.fail(e as Error); }
       }
+      return false;
     }
   }
   async retryPermissions(): Promise<void> {
