@@ -29,6 +29,7 @@ export class HarmonyColors {
   static readonly glass_stroke: Resource = $r('app.color.ui_glass_stroke');
   static readonly glass_highlight: Resource = $r('app.color.ui_glass_highlight');
   static readonly glass_shadow: Resource = $r('app.color.ui_glass_shadow');
+  static readonly sheet_tint: Resource = $r('app.color.ui_sheet_tint');
   static readonly sheet_scrim: Resource = $r('app.color.ui_sheet_scrim');
   static readonly success: Resource = $r('app.color.ui_success');
   static readonly success_bg: Resource = $r('app.color.ui_success_bg');

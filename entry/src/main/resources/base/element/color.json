@@ -121,6 +121,10 @@
       "value": "#24101828"
     },
     {
+      "name": "ui_sheet_tint",
+      "value": "#E6F5F5F2"
+    },
+    {
       "name": "ui_sheet_scrim",
       "value": "#4D1A2233"
     },

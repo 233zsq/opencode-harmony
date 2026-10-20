@@ -45,8 +45,8 @@ export struct ConversationMessage {
       Column({ space: 8 }) {
         if (this.message.text) { Row() {
         Blank().layoutWeight(1)
-        Button('编辑').id('edit-fork-' + this.message.id).accessibilityText('编辑这条消息并分叉').buttonStyle(ButtonStyleMode.TEXTUAL).height(26).width(26).padding(0).fontSize(10.5).fontColor(C.muted).margin({ right: 6, top: 5 }).onClick(() => { this.onFork(true); })
-        Text(this.message.text).id('message-user-' + this.message.id).fontSize(14.5).lineHeight(24).fontColor(C.text)
+        Button('编辑').id('edit-fork-' + this.message.id).accessibilityText('编辑这条消息并分叉').buttonStyle(ButtonStyleMode.TEXTUAL).height(28).width(28).padding(0).fontSize(11).fontColor(C.muted).margin({ right: 6, top: 5 }).onClick(() => { this.onFork(true); })
+        Text(this.message.text).id('message-user-' + this.message.id).fontSize(14.5).lineHeight(25).fontColor(C.text)
           .padding({ left: 15, right: 15, top: 12, bottom: 12 }).backgroundColor(C.bubble)
           .borderRadius({ topLeft: 14, topRight: 14, bottomRight: 4, bottomLeft: 14 })
           .constraintSize({ maxWidth: '88%' }).copyOption(CopyOptions.InApp)
@@ -54,14 +54,14 @@ export struct ConversationMessage {
         if (this.message.files?.length) { AttachmentStrip({ items: this.message.files || [], onOpen: this.onAttachment }) }
       }.width('100%').alignItems(HorizontalAlign.End).margin({ top: 12, bottom: 12 }).bindContextMenu(this.copyMenu(), ResponseType.LongPress)
     } else if (this.message.role !== 'assistant') {
-      Text(this.message.text).fontSize(11).fontFamily('monospace').fontColor(C.muted).width('100%').textAlign(TextAlign.Center).padding(8)
+      Text(this.message.text).fontSize(11).fontColor(C.muted).width('100%').textAlign(TextAlign.Center).padding(8)
     } else {
       Column({ space: 8 }) {
         if (this.message.reasoning) {
           Column({ space: 0 }) {
             Row({ space: 9 }) {
               SymbolGlyph($r('sys.symbol.lightbulb')).fontSize(14).fontColor([C.secondary])
-              Text(this.thinking ? '正在思考' : '思考已完成').fontSize(11.5).fontColor(C.secondary).layoutWeight(1)
+              Text(this.thinking ? '正在思考' : '思考已完成').fontSize(11).fontColor(C.secondary).layoutWeight(1)
               SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).fontColor([C.muted]).rotate({ angle: this.reasoningExpanded ? 90 : 0 })
             }.id('reasoning-toggle-' + this.message.id).width('100%').height(36).padding({ left: 10, right: 10 })
               .onClick(() => { this.onToggleReasoning(); })
@@ -74,7 +74,7 @@ export struct ConversationMessage {
                 .padding({ left: 14, right: 14, bottom: 12 }).scrollBar(BarState.Auto)
                 .onAppear(() => { if (this.thinking) { setTimeout(() => { this.reasoningScroller.scrollEdge(Edge.Bottom); }, 30); } })
               if (this.message.reasoning.length > (this.thinking ? 8000 : 12000)) {
-                Text(this.thinking ? '显示最近的思考内容' : '较长内容已截断，完整记录保留在服务器').fontSize(10).fontFamily('monospace').fontColor(C.muted).padding({ left: 14, right: 14, bottom: 10 })
+                Text(this.thinking ? '显示最近的思考内容' : '较长内容已截断，完整记录保留在服务器').fontSize(11).fontColor(C.muted).padding({ left: 14, right: 14, bottom: 10 })
               }
             }
           }.width('100%').border({ width: 1, color: C.separator }).borderRadius(8)
@@ -83,10 +83,10 @@ export struct ConversationMessage {
         if (this.message.text || this.message.tools.length) {
           Row({ space: 10 }) {
             if (this.message.text) {
-              Button('复制回复').id('copy-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(22).padding({ left: 0, right: 8 }).fontSize(10.5).fontFamily('monospace').fontColor(C.muted).onClick(() => { this.onCopy(this.message.text); })
+              Button('复制回复').id('copy-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(28).padding({ left: 0, right: 8 }).fontSize(11).fontColor(C.muted).onClick(() => { this.onCopy(this.message.text); })
               Divider().vertical(true).height(10).color(C.separator)
             }
-            Button('分叉').id('fork-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(22).fontSize(10.5).fontFamily('monospace').fontColor(C.muted).onClick(() => { this.onFork(false); })
+            Button('分叉').id('fork-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(28).fontSize(11).fontColor(C.muted).onClick(() => { this.onFork(false); })
           }.width('100%')
         }
         if (this.message.tools.length) {
@@ -96,9 +96,9 @@ export struct ConversationMessage {
               if (index > 0) { Divider().color(C.separator).margin({ left: 10, right: 10 }) }
               Row({ space: 8 }) {
                 SymbolGlyph(tool.status === 'error' || tool.status === 'failed' ? $r('sys.symbol.exclamationmark_circle') : $r('sys.symbol.code_square')).fontSize(14).fontColor([tool.status === 'error' || tool.status === 'failed' ? C.danger : C.secondary])
-                Text(this.label(tool)).fontSize(11.5).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(1).constraintSize({ maxWidth: 90 })
+                Text(this.label(tool)).fontSize(13.5).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(1).constraintSize({ maxWidth: 90 })
                 Text(this.summary(tool)).fontSize(10).fontFamily('monospace').fontColor(C.muted).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-                Text(toolStatus(tool.status)).fontSize(9).fontFamily('monospace').letterSpacing(0.4).fontColor(this.stateColor(tool.status))
+                Text(toolStatus(tool.status)).fontSize(9.5).fontFamily('monospace').letterSpacing(1.2).fontColor(this.stateColor(tool.status))
                 SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(12).fontColor([C.muted])
               }.id('tool-row-' + tool.id).width('100%').height(40).padding({ left: 10, right: 10 }).onClick(() => { this.onTool(tool); })
             }, (tool: ToolItem) => tool.id + tool.status + tool.input)
