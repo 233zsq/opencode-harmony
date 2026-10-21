@@ -51,6 +51,6 @@ export struct QuickModelPicker {
         .enabled(!this.busy).onClick(() => { this.onAll(); })
       Button('模型与接入', { type: ButtonType.Normal }).id('quick-model-manage').height(44).width('100%').fontSize(14).fontColor(C.text)
         .backgroundColor(Color.Transparent).borderRadius(12).enabled(!this.busy).onClick(() => { this.onManage(); })
-    }.id('model-quick-picker').width('100%').padding({ left: 8, right: 8, top: 8, bottom: 8 }).backgroundColor(C.surface).borderRadius(22)
+    }.id('model-quick-picker').width('100%').padding({ left: 8, right: 8, top: 8, bottom: 8 }).backgroundColor(Color.Transparent).borderRadius(22)
   }
 }

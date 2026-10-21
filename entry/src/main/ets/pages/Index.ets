@@ -15,7 +15,9 @@ import { copyText } from '../presentation/Clipboard';
 import { Appearance } from '../presentation/Appearance';
 import { SymbolGlyphModifier, KeyboardAvoidMode } from '@kit.ArkUI';
 import { NativeSegments } from '../components/NativeSegments';
-import { GlassPanel, StatusLed, CodeMark } from '../components/Material';
+import { StatusLed, CodeMark } from '../components/Material';
+import { loadImmersiveMaterials } from '../presentation/ImmersiveMaterials';
+import deviceInfo from '@ohos.deviceInfo';
 import { HarmonyColors as C } from '../presentation/HarmonyColors';
 import { common } from '@kit.AbilityKit';
 import { AppStore } from '../presentation/AppStore';
@@ -138,6 +140,8 @@ struct Index {
   @State viewportWidth: number = 400;
   @State viewportHeight: number = 800;
   @State @Watch('conversationVisibilityChanged') modelPopupOpen: boolean = false;
+  @State private modelMaterial: SystemUiMaterial | undefined = undefined;
+  @State private compactSheetMaterial: SystemUiMaterial | undefined = undefined;
   @State sessionSearch: string = '';
   @State pendingFilter: number = 0;
   @State selectedSession: SessionItem = { id: '', title: '', directory: '', status: '', model: '' };
@@ -161,6 +165,7 @@ struct Index {
 
   aboutToAppear(): void {
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    loadImmersiveMaterials().then((materials): void => { this.modelMaterial = materials.popup; this.compactSheetMaterial = materials.sheet; });
     const context = this.getUIContext().getHostContext();
     if (context) {
       const ability = context as common.UIAbilityContext;
@@ -171,7 +176,7 @@ struct Index {
     }
   }
   aboutToDisappear(): void { if (this.scrollTimer >= 0) { clearTimeout(this.scrollTimer); this.scrollTimer = -1; } this.store.setActive(false); }
-  onBackPress(): boolean { if (this.modelPopupOpen) { this.modelPopupOpen = false; return true; } if (this.sidebarOpen) { this.sidebarOpen = false; return true; } return false; }
+  onBackPress(): boolean { if (this.modelPopupOpen) { this.modelPopupOpen = false; return true; } if (this.toolSheetOpen) { this.closePanel(); return true; } if (this.sidebarOpen) { this.dismissKeyboard(); this.sidebarOpen = false; return true; } return false; }
   private storeChanged(): void {
     if (this.store.reminderQuietSeq !== this.quietSeq) {
       this.quietSeq = this.store.reminderQuietSeq;
@@ -263,14 +268,14 @@ struct Index {
       Column() {
         this.sheetContent()
       }
-      .width('100%').height('100%').backgroundColor(C.sheet_tint)
+      .width('100%').height('100%').backgroundColor(C.surface)
       .border({ width: { top: 1 }, color: C.glass_stroke })
       .borderRadius({ topLeft: 20, topRight: 20 }).clip(true)
     } else {
       Column() {
         this.sheetContent()
       }
-      .width('100%').backgroundColor(C.sheet_tint)
+      .width('100%').backgroundColor(Color.Transparent)
       .border({ width: { top: 1 }, color: C.glass_stroke })
       .borderRadius({ topLeft: 20, topRight: 20 }).clip(true)
     }
@@ -836,98 +841,78 @@ struct Index {
       }.padding(18).width('100%')
     }.layoutWeight(1).align(Alignment.TopStart).scrollBar(BarState.Off)
   }
+  private sidebarWidth(): number { return this.wide ? 280 : Math.min(320, this.viewportWidth * 0.84); }
+  @Builder
+  historyMenu() {
+    Menu() {
+      MenuItem({ content: '最近对话' }).id('history-recent').onClick(() => {
+        this.store.showArchived = false;
+        if (this.store.sessionQuery) { this.sessionSearch = ''; this.store.refreshSessions(false, ''); }
+      })
+      MenuItem({ content: '本机归档' }).id('history-archived').onClick(() => { this.store.showArchived = true; })
+      MenuItem({ content: '刷新历史' }).id('history-refresh').enabled(!this.store.sessionsBusy && !!this.store.directory)
+        .onClick(() => { this.store.refreshSessions(false, this.sessionSearch); })
+    }
+  }
   @Builder
   sidebar(width: number) {
     Column({ space: 0 }) {
-      Row({ space: 9 }) {
-        CodeMark({ markSize: 32 })
-        Column({ space: 5 }) {
-          Text('OpenCode').fontSize(18).fontWeight(FontWeight.Bold).fontColor(C.text).letterSpacing(-0.2)
-          Text('你的开发空间').fontSize(12).fontColor(C.secondary)
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.xmark')).fontSize(15).fontColor([C.secondary]) }
-          .id('close-sidebar').accessibilityText('关闭历史侧栏').width(40).height(40).backgroundColor(Color.Transparent)
-          .onClick(() => { this.sidebarOpen = false; })
-      }.width('100%').padding({ top: 8, bottom: 12 })
-      Button('新建对话', { type: ButtonType.Normal }).id('sidebar-new-chat').width('100%').constraintSize({ minHeight: 40 }).fontSize(14)
-        .fontWeight(FontWeight.Medium).backgroundColor(C.btn).fontColor(C.btn_text).borderRadius(14).enabled(!this.store.busy)
-        .onClick(() => { this.newChat(); })
-      Button({ type: ButtonType.Normal }) {
-        Row({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.folder')).fontSize(15).fontColor([C.secondary])
-          Text(this.projectName()).fontSize(14).fontColor(C.secondary).layoutWeight(1).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted])
-        }.padding({ left: 8, right: 8 })
-      }.id('sidebar-projects').width('100%').constraintSize({ minHeight: 40 }).backgroundColor(Color.Transparent).borderRadius(14)
-        .enabled(!!this.store.connected).onClick(() => { this.navigate('projects'); })
-      this.sessionFilters()
-      Text(this.store.showArchived ? '本机归档' : '历史对话').fontSize(12).fontWeight(FontWeight.Medium)
-        .letterSpacing(1.4).fontColor(C.muted).width('100%').padding({ top: 16, bottom: 4 })
+      Row({ space: 8 }) {
+        Button({ type: ButtonType.Normal }) {
+          Row({ space: 6 }) {
+            Text(this.store.showArchived ? '本机归档' : '历史对话').fontSize(16).fontWeight(FontWeight.Medium).fontColor(C.text)
+            SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(11).fontColor([C.muted])
+          }
+        }.id('history-filter').height(40).padding({ left: 8, right: 8 }).backgroundColor(Color.Transparent)
+          .borderRadius(12).bindMenu(this.historyMenu()).accessibilityText('切换历史列表或刷新')
+        Blank().layoutWeight(1)
+        Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.square_and_pencil')).fontSize(19).fontColor([C.accent]) }
+          .id('sidebar-new-chat').accessibilityText('新建对话').width(40).height(40).backgroundColor(C.glass_strong)
+          .enabled(!this.store.busy).onClick(() => { this.newChat(); })
+      }.width('100%').padding({ top: 4, bottom: 8 })
+      Row({ space: 0 }) {
+        TextInput({ placeholder: '搜索对话', text: this.sessionSearch }).id('history-search').fontSize(14).height(40)
+          .fontColor(C.text).placeholderColor(C.muted).backgroundColor(Color.Transparent).layoutWeight(1)
+          .enterKeyType(EnterKeyType.Search).onChange((value: string) => { this.sessionSearch = value; })
+          .onSubmit(() => { if (!this.store.sessionsBusy && this.store.directory) { this.dismissKeyboard(); this.store.refreshSessions(false, this.sessionSearch); } })
+        Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(16).fontColor([C.secondary]) }
+          .id('history-search-server').accessibilityText('搜索服务器历史').width(40).height(40).backgroundColor(Color.Transparent)
+          .enabled(!this.store.sessionsBusy && !!this.store.directory)
+          .onClick(() => { this.dismissKeyboard(); this.store.refreshSessions(false, this.sessionSearch); })
+      }.width('100%').backgroundColor(C.field).borderRadius(16).margin({ bottom: 10 })
+      if (this.store.sessionQuery) {
+        Text('服务器搜索：' + this.store.sessionQuery).fontSize(12).fontColor(C.muted).maxLines(1).width('100%').padding({ left: 8, bottom: 6 })
+      }
       Scroll() {
-        Column({ space: 5 }) {
+        Column({ space: 3 }) {
           ForEach(this.store.sessionRows(this.sessionSearch), (session: SessionItem) => { this.sessionRow(session, true) },
             (session: SessionItem) => session.id + session.title + this.store.sessionLabel(session.id) + String(this.store.isPinned(session.id)))
           this.sessionPaging()
           if (!this.store.sessionRows(this.sessionSearch).length) {
-            Text(this.store.connected ? '暂无匹配的会话，可搜索服务器历史或切换归档。' : '连接服务器后，继续你的对话')
-              .fontSize(14).fontColor(C.muted).padding(12)
+            Text(this.store.connected ? '暂无匹配对话，可搜索服务器历史或切换归档。' : '连接服务器后，继续你的对话')
+              .fontSize(14).lineHeight(22).fontColor(C.muted).padding(12)
           }
         }.width('100%')
-      }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
-      Divider().color(C.separator)
-      Text('工作区').fontSize(12).fontWeight(FontWeight.Medium).letterSpacing(1.4).fontColor(C.muted)
-        .width('100%').padding({ top: 10, bottom: 2 })
-      Button({ type: ButtonType.Normal }) {
-        Row({ space: 9 }) {
-          SymbolGlyph($r('sys.symbol.checkmark')).fontSize(14).fontColor([C.secondary])
-          Text('待办中心').fontSize(14).fontColor(C.text).layoutWeight(1)
-          if (this.store.pendingItems.length) { this.badge(String(this.store.pendingItems.length), C.warning_bg) }
-        }.padding({ left: 8, right: 8 })
-      }.id('nav-pending').width('100%').constraintSize({ minHeight: 40 }).backgroundColor(Color.Transparent).borderRadius(14)
-        .enabled(!!this.store.connected).onClick(() => { this.navigate('pending'); })
-      Button({ type: ButtonType.Normal }) {
-        Row({ space: 9 }) {
-          SymbolGlyph($r('sys.symbol.doc_text')).fontSize(14).fontColor([C.secondary])
-          Text('代码审查').fontSize(14).fontColor(C.text).layoutWeight(1)
-          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted])
-        }.padding({ left: 8, right: 8 })
-      }.id('nav-review').width('100%').constraintSize({ minHeight: 40 }).backgroundColor(Color.Transparent).borderRadius(14)
-        .enabled(!!this.store.directory).onClick(() => { this.navigate('review'); })
-      Button({ type: ButtonType.Normal }) {
-        Row({ space: 9 }) {
-          SymbolGlyph($r('sys.symbol.code_square')).fontSize(14).fontColor([C.secondary])
-          Text('模型与接入').fontSize(14).fontColor(C.text).layoutWeight(1)
-          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted])
-        }.padding({ left: 8, right: 8 })
-      }.id('nav-settings').width('100%').constraintSize({ minHeight: 40 }).backgroundColor(Color.Transparent).borderRadius(14)
-        .enabled(!!this.store.connected).onClick(() => { this.navigate('settings'); })
-      Row({ space: 9 }) {
-        SymbolGlyph($r('sys.symbol.bell')).fontSize(14).fontColor([C.secondary])
-        Text('任务提醒').fontSize(14).fontColor(C.text).layoutWeight(1)
-        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted])
-      }.id('nav-reminders').width('100%').constraintSize({ minHeight: 40 }).backgroundColor(Color.Transparent).borderRadius(14)
-        .onClick(() => { this.navigate('reminders'); })
+      }.id('history-list').layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
       Row({ space: 10 }) {
         Stack() {
-          SymbolGlyph($r('sys.symbol.dot_radiowaves_left_and_right_badge_person_filled')).fontSize(15)
+          SymbolGlyph($r('sys.symbol.dot_radiowaves_left_and_right_badge_person_filled')).fontSize(16)
             .fontColor([this.store.connected ? C.accent : C.muted])
-        }.width(28).height(28).backgroundColor(C.field).borderRadius(7)
-        Column({ space: 5 }) {
-          Text(this.serverName()).fontSize(14).fontColor(C.text).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }.width(30).height(30).backgroundColor(C.accent_soft).borderRadius(9)
+        Column({ space: 4 }) {
+          Text(this.serverName()).fontSize(14).fontColor(C.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           Row({ space: 5 }) {
             StatusLed({ color: this.store.connected ? C.success : C.muted })
-            Text(this.store.status).fontSize(12).fontFamily('monospace').fontColor(C.muted).maxLines(1)
+            Text(this.store.status).fontSize(12).fontColor(C.secondary).maxLines(1)
           }
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted])
-      }.id('nav-connections').padding({ left: 8, right: 8, top: 9, bottom: 9 }).width('100%').borderRadius(14)
-        .border({ width: 1, color: C.separator }).onClick(() => { this.navigate('connections'); })
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(13).fontColor([C.muted])
+      }.id('nav-connections').accessibilityText('服务器连接').padding(10).width('100%').borderRadius(18).margin({ top: 10 })
+        .backgroundColor(C.glass_strong).border({ width: 0.5, color: C.glass_stroke }).onClick(() => { this.navigate('connections'); })
     }.id('history-sidebar').padding({ left: 14, right: 14, bottom: 12 }).width(width).height('100%')
-      .backgroundEffect({ radius: 20, saturation: 1.05, brightness: 1.0, color: C.glass_fill })
-      .border({ width: { right: 1 }, color: C.glass_stroke })
-      .shadow({ radius: 18, color: C.glass_shadow, offsetX: 8, offsetY: 0 })
+      .backgroundEffect({ radius: 38, saturation: 1.15, brightness: 1.0, color: C.glass_fill })
+      .border({ width: { right: 0.5 }, color: C.glass_stroke })
+      .shadow({ radius: 22, color: C.glass_shadow, offsetX: 8, offsetY: 0 })
   }
   @Builder
   attachmentMenu() {
@@ -1208,6 +1193,31 @@ struct Index {
       onAll: (): void => { this.modelPopupOpen = false; this.openSheet('model'); },
       onManage: (): void => { this.navigate('settings'); } })
   }
+  private modelPopupOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = { builder: (): void => { this.quickModelPopup(); }, placement: Placement.BottomLeft, enableArrow: false,
+      width: Math.min(300, this.viewportWidth - 40), targetSpace: 8, offset: { x: -40, y: 0 }, radius: 24,
+      popupColor: C.glass_strong, backgroundBlurStyle: BlurStyle.COMPONENT_THICK, shadow: ShadowStyle.OUTER_DEFAULT_MD,
+      mask: { color: '#0A000000' }, autoCancel: true, focusable: false,
+      onWillDismiss: (action): void => { action.dismiss(); this.modelPopupOpen = false; },
+      transition: TransitionEffect.OPACITY.animation({ duration: 160, curve: Curve.EaseOut }),
+      onStateChange: (event): void => { if (!event.isVisible) { this.modelPopupOpen = false; } } };
+    if (deviceInfo.sdkApiVersion >= 26) {
+      if (deviceInfo.apiAvailable('26.0.0')) { if (this.modelMaterial) { options.systemMaterial = this.modelMaterial; options.focusable = true; } }
+    }
+    return options;
+  }
+  private surfaceSheetOptions(): SheetOptions {
+    const options: SheetOptions = { height: this.isLargeSheet() ? SheetSize.LARGE : SheetSize.FIT_CONTENT,
+      showClose: true, blurStyle: BlurStyle.COMPONENT_THICK, backgroundColor: C.sheet_tint,
+      onWillDismiss: (action): void => { action.dismiss(); this.toolSheetOpen = false; },
+      maskColor: C.sheet_scrim, borderWidth: 1, borderColor: C.glass_stroke,
+      shadow: { radius: 36, color: C.glass_shadow, offsetX: 0, offsetY: -8 },
+      onDisappear: (): void => { this.toolSheetOpen = false; if (this.store.exporting) { this.store.cancelExport(); } } };
+    if (deviceInfo.sdkApiVersion >= 26) {
+      if (deviceInfo.apiAvailable('26.0.0')) { if (this.compactSheetMaterial && !this.isLargeSheet()) { options.systemMaterial = this.compactSheetMaterial; } }
+    }
+    return options;
+  }
   @Builder
   chatTitle() {
     Row({ space: 8 }) {
@@ -1216,21 +1226,16 @@ struct Index {
         Button(this.modelLabel(), { type: ButtonType.Normal }).id('model-select')
           .fontSize(15).fontWeight(FontWeight.Medium).fontColor(C.text).height(36)
           .labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
-          .backgroundColor(C.surface).border({ width: 1, color: C.separator }).borderRadius(999)
+          .backgroundEffect({ radius: 20, saturation: 1.1, color: C.glass_fill }).border({ width: 0.5, color: C.glass_stroke }).borderRadius(999)
           .padding({ left: 13, right: 13 })
           .constraintSize({ maxWidth: 220 })
-          .width(Math.min(220, Math.max(96, this.viewportWidth - (this.wide && this.sidebarOpen ? 256 : 0) - (this.sidebarOpen ? 168 : 224))))
+          .width(Math.min(220, Math.max(96, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))))
           .enabled(!!this.store.sessionID && !this.store.busy).accessibilityText('选择对话模型')
           .onClick(() => { this.dismissKeyboard(); this.store.error = ''; this.modelPopupOpen = !this.modelPopupOpen; })
-          .bindPopup(this.modelPopupOpen, { builder: this.quickModelPopup(), placement: Placement.BottomLeft, enableArrow: false,
-            width: Math.min(300, this.viewportWidth - 40), targetSpace: 8, offset: { x: -40, y: 0 }, radius: 24, popupColor: C.surface,
-            backgroundBlurStyle: BlurStyle.COMPONENT_ULTRA_THICK, shadow: ShadowStyle.OUTER_DEFAULT_MD,
-            mask: { color: '#0A000000' }, autoCancel: true, focusable: false,
-            transition: TransitionEffect.OPACITY.animation({ duration: 160, curve: Curve.EaseOut }),
-            onStateChange: (event): void => { this.modelPopupOpen = event.isVisible; } })
+          .bindPopup(this.modelPopupOpen, this.modelPopupOptions())
       } else { Text('OpenCode').fontSize(15).fontWeight(FontWeight.Bold).fontColor(C.text).layoutWeight(1) }
       Blank().layoutWeight(1)
-    }.width(Math.max(180, this.viewportWidth - (this.wide && this.sidebarOpen ? 256 : 0) - 104)).height(56)
+    }.width(Math.max(180, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - 104)).height(56)
   }
   @Builder
   errorBanner() {
@@ -1271,7 +1276,8 @@ struct Index {
   }
   build() {
     SideBarContainer(this.wide ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
-      this.sidebar(this.wide ? 256 : Math.min(276, this.viewportWidth * 0.74))
+      this.sidebar(this.sidebarWidth())
+      Stack() {
       Navigation(this.navigation) {
         Column({ space: 0 }) { this.errorBanner(); this.chat() }.height('100%').width('100%').backgroundColor(C.page)
       }.id('native-navigation').title(this.chatTitle()).titleMode(NavigationTitleMode.Mini)
@@ -1282,10 +1288,16 @@ struct Index {
         .navDestination(this.destination).mode(NavigationMode.Stack).hideBackButton(true)
         .onNavBarStateChange((visible: boolean) => { if (visible && !this.navigation.getAllPathName().length && this.store.pane !== 'chat') { this.store.pane = 'chat'; } })
         .backgroundColor(C.page).height('100%').width('100%')
+        if (this.sidebarOpen && !this.wide) {
+          Column().id('sidebar-dismiss').width(Math.max(44, this.viewportWidth - this.sidebarWidth())).height('100%')
+            .position({ x: this.sidebarWidth(), y: 0 }).backgroundColor('#14000000')
+            .accessibilityText('收起历史对话').accessibilityLevel('yes').onClick(() => { this.dismissKeyboard(); this.sidebarOpen = false; })
+        }
+      }.width('100%').height('100%')
     }.id('native-sidebar-container').showSideBar(this.sidebarOpen).showControlButton(!this.sidebarOpen && this.store.pane === 'chat')
       .controlButton({ left: 16, top: 16, width: 24, height: 24 })
-      .sideBarWidth(this.wide ? 256 : Math.min(276, this.viewportWidth * 0.74)).minSideBarWidth(220).maxSideBarWidth(276)
-      .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { if (show) { this.dismissKeyboard(); } this.sidebarOpen = show; })
+      .sideBarWidth(this.sidebarWidth()).minSideBarWidth(220).maxSideBarWidth(320)
+      .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { this.dismissKeyboard(); this.sidebarOpen = show; })
       .width('100%').height('100%').backgroundColor(C.page).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .onAreaChange((oldArea: Area, newArea: Area) => {
         this.viewportWidth = Number(newArea.width); this.viewportHeight = Number(newArea.height); const wide = this.viewportWidth >= 840; if (this.wide !== wide) { this.wide = wide; this.sidebarOpen = wide; }
@@ -1295,15 +1307,6 @@ struct Index {
           setTimeout(() => { if (this.follow && this.store.pane === 'chat' && !this.toolSheetOpen && !this.modelPopupOpen) { this.scroller.scrollEdge(Edge.Bottom); } }, 140);
         }
       })
-      .bindSheet($$this.toolSheetOpen, this.sheetSurface(), {
-        height: this.isLargeSheet() ? SheetSize.LARGE : SheetSize.FIT_CONTENT,
-        showClose: true,
-        blurStyle: BlurStyle.COMPONENT_ULTRA_THICK,
-        maskColor: C.sheet_scrim,
-        borderWidth: 1,
-        borderColor: C.glass_stroke,
-        shadow: { radius: 36, color: C.glass_shadow, offsetX: 0, offsetY: -8 },
-        onDisappear: (): void => { if (this.store.exporting) { this.store.cancelExport(); } }
-      })
+      .bindSheet($$this.toolSheetOpen, this.sheetSurface(), this.surfaceSheetOptions())
   }
 }

@@ -102,15 +102,15 @@
     },
     {
       "name": "ui_glass_fill",
-      "value": "#F2171B21"
+      "value": "#C21B2028"
     },
     {
       "name": "ui_glass_strong",
-      "value": "#F21C2027"
+      "value": "#CF242B35"
     },
     {
       "name": "ui_glass_stroke",
-      "value": "#363D47"
+      "value": "#4D8994A6"
     },
     {
       "name": "ui_glass_highlight",
@@ -122,7 +122,7 @@
     },
     {
       "name": "ui_sheet_tint",
-      "value": "#FA191D24"
+      "value": "#C7242B35"
     },
     {
       "name": "ui_sheet_scrim",

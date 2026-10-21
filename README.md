@@ -26,11 +26,13 @@
 - 任务提醒：完成/失败/待回答与待审批可分别开关，仅在用户主动开启时申请系统通知权限；通知只显示通用状态，点击回到对应会话并保留草稿；当前正在查看的会话只用安静应用内提示。前台、短时间后台与进程退出边界见 [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)。
 - 手机输入与适配：真实软键盘避让、中文候选栏与多行输入、切换会话/打开面板时收起键盘并保留草稿、系统大字体（跟随系统，上限 1.75）、窄屏省略与图标按钮无障碍热区；边界见 [MOBILE-USABILITY.md](docs/MOBILE-USABILITY.md)，通知审查与修复见 [MOBILE-REVIEW.md](docs/MOBILE-REVIEW.md)。
 
-已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 265 项 Node 回归、2 项 Python 域校验、4 项 Node 合成负载检查及完整构建；本轮交互与提醒在 API26 模拟器验收，真机、横屏/分屏和 API24 设备留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 273 项 Node 回归、2 项 Python 域校验、4 项 Node 合成负载检查及完整构建；本轮交互与提醒在 API26 模拟器验收，真机、横屏/分屏和 API24 设备留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
 独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
 界面位置与交互规则、设备验证及聊天间距/输入区修复见 [UI.md](docs/UI.md)。原生控件、API26材质和兼容边界见 [NATIVE-UI.md](docs/NATIVE-UI.md)。聊天、会话与待办的新功能和最终交互验收清单见 [WORKSPACE-FEATURES.md](docs/WORKSPACE-FEATURES.md)。任务提醒能力边界见 [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)，移动端输入/大字号/无障碍见 [MOBILE-USABILITY.md](docs/MOBILE-USABILITY.md)。
+
+最新侧栏与材质调整见 [HISTORY-AND-MATERIALS.md](docs/HISTORY-AND-MATERIALS.md)：历史列表占侧栏主要空间，点外部收起，模型浮层按 API26 能力显式开启沉浸光感。
 
 ## 开发环境
 
@@ -64,6 +66,8 @@
     node tests/attachments.test.mjs
     node tests/permission-metadata.test.mjs
     node tests/appearance.test.mjs
+    node tests/immersive-materials.test.mjs
+    node tests/native-driver.test.mjs
     node tests/ui-palette.test.mjs
     node tests/local-state.test.mjs
     node tests/workspace-http.test.mjs

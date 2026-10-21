@@ -19,7 +19,7 @@ await control('ui-phase?phase=answer');await pause(1800);await wait('reasoning-t
 await tap(await reveal('tool-row-'+test.toolID));await wait('native-back');await wait('tool-request');await wait('tool-response');
 await control('ui-phase?phase=tool-done');await pause(1800);assert.match(find('tool-response').text,/verified sample only/);await shot('luminous-tool');await back();
 await shot('luminous-chat');
-await tap('open-sidebar');await wait('close-sidebar');await shot('luminous-sidebar');await back();
+await tap('open-sidebar');await wait('history-list');await shot('luminous-sidebar');await back();
 await menu('外观');const appearance=find('外观')&&layout().find(n=>n.text?.startsWith('当前外观：'))?.text;
 const original=appearance?.slice(5);assert.ok(['跟随系统','浅色','深色'].includes(original),'Original appearance must be readable.');
 try{
