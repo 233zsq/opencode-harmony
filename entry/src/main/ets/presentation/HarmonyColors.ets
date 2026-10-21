@@ -1,5 +1,7 @@
 // Semantic resources follow the system light/dark mode on API24 and newer.
 export class HarmonyColors {
+  static readonly hero_glow: Resource = $r('app.color.ui_hero_glow');
+  static readonly hero_edge: Resource = $r('app.color.ui_hero_edge');
   static readonly on_accent: Resource = $r('app.color.ui_on_accent');
   static readonly page: Resource = $r('app.color.ui_page');
   static readonly surface: Resource = $r('app.color.ui_surface');

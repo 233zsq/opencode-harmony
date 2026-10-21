@@ -64,17 +64,17 @@ export class ProviderStore {
   private path(suffix: string): string { return '/api/integration/' + encodeURIComponent(this.selected) + suffix + '?' + this.api?.scope(this.directory); }
   private attemptPath(): string { return this.path('/connect/oauth/' + encodeURIComponent(this.attemptID)); }
   private fail(): void { this.error = '操作未完成，请检查输入及连接状态；不会自动重复保存凭据。'; }
-  filtered(): Integration[] {
+  filtered(focusSelection: boolean = true): Integration[] {
     const term = this.search.toLowerCase().trim();
-    if (this.selected && !term) { return this.entries.filter((p: Integration) => p.id === this.selected); }
+    if (focusSelection && this.selected && !term) { return this.entries.filter((p: Integration) => p.id === this.selected); }
     return this.entries.filter((p: Integration) => term ? (p.id + ' ' + p.name).toLowerCase().includes(term) :
       p.accounts.length > 0 || /deepseek|mimo|xiaomi|openai|opencode|anthropic|openrouter|google|silicon|volc|kimi|moonshot|zhipu|minimax|alibaba/i.test(p.id + p.name)).slice(0, 40);
   }
-  quickSelect(term: string): void {
+  quickSelect(term: string): boolean {
     this.section = 'native'; this.search = '';
     const entry = this.entries.find((item: Integration) => item.id === term) || this.entries.find((item: Integration) => (item.id + ' ' + item.name).toLowerCase().includes(term));
-    if (entry) { this.select(entry); const method = entry.methods.find((item: AuthMethod) => item.type === 'key' && item.supported); if (method) { this.choose(method); } }
-    else { this.search = term; this.notice = '请从服务器提供的入口中选择；也可使用自定义兼容渠道。'; }
+    if (entry) { this.select(entry); const method = entry.methods.find((item: AuthMethod) => item.type === 'key' && item.supported); if (method) { this.choose(method); } return true; }
+    else { this.search = term; this.notice = '请从服务器提供的入口中选择；也可使用自定义兼容渠道。'; return false; }
   }
   modelMatches(): ModelItem[] { const term = this.modelSearch.trim().toLowerCase(); return this.catalog.filter((item: ModelItem) => (item.id + ' ' + item.label).toLowerCase().includes(term)); }
   visibleModels(): ModelItem[] { return this.modelMatches().slice(0, 60); }

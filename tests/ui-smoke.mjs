@@ -29,6 +29,7 @@ async function click(q){
   }
   throw new Error('Native navigation did not finish returning to chat');
  }
+ if(q.startsWith('menu-')||q==='appearance-menu'){await clickNode(await reveal(aliases[q]||q));return;}
  await clickNode(await waitFor(q));
 }
 async function clickNode(n){assert.ok(n,'UI control missing');const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(300);}
@@ -62,9 +63,9 @@ if(mode==='home'){
  const test=JSON.parse(readFileSync('.test/ui-case.json','utf8'));
  await click('reasoning-toggle-'+test.id);assert.ok(find('reasoning-content-'+test.id));await click('reasoning-toggle-'+test.id);assert.ok(!find('reasoning-content-'+test.id));
  await click('tool-row-'+test.toolID);assert.ok(find('tool-request'));assert.ok(find('tool-response'));await shot('ui-tool-running');
- await control('ui-phase?phase=tool-done');await pause(1800);assert.ok((find('tool-response').text||'').includes('verified sample only'));await shot('ui-tool-completed');cmd('shell','uitest uiInput keyEvent Back');await pause(400);console.log('PASS independent reasoning toggle and live tool sheet updates.');
+ await control('ui-phase?phase=tool-done');await pause(1800);assert.ok((find('tool-response').text||'').includes('verified sample only'));await shot('ui-tool-completed');cmd('shell','uitest uiInput keyEvent Back');await pause(400);console.log('PASS independent reasoning toggle and live tool page updates.');
 }else if(mode==='menu'){
- await click('open-menu');await click('menu-connections');await pause(700);await reveal('server-url');assert.ok(find('server-url'));assert.ok(!find('open-sidebar'),'Sidebar control covers destination back button');await shot('ui-connections');await click('native-back');await pause(1500);assert.ok(find('chat-input'));console.log('PASS management navigation returns with the native back button unobstructed.');
+ await click('open-menu');await click('menu-connections');await pause(700);await waitFor('add-server');assert.ok(find('add-server'));assert.ok(!find('open-sidebar'),'Sidebar control covers destination back button');await shot('ui-connections');await click('native-back');await pause(1500);assert.ok(find('chat-input'));console.log('PASS management navigation returns with the native back button unobstructed.');
 }else if(mode==='question'){
  if(!(await state()).forms.length){await input('chat-input','test question');await click('send-button');await pause(8500);}
  for(const id of ['choice-approach-minimal','choice-areas-chat','choice-areas-diff']){const item=await reveal(id);if(item.checked!=='true')await clickNode(item);}
@@ -81,11 +82,11 @@ if(mode==='home'){
  await reveal('turn-turn_b');await click('turn-turn_b');await pause(700);await reveal('+TASK_B_ONLY');assert.ok(find('+TASK_B_ONLY'));assert.ok(!find('+TASK_A_ONLY'));await click('back-chat');console.log('PASS native task grouping and same-file Diff refresh in both directions.');
 }else if(mode==='providers-live'){
  if(find('back-chat'))await click('back-chat');await click('open-menu');await click('menu-settings');await pause(1500);await click('提供商');await click('quick-opencode');await reveal('provider-key');assert.ok(find('provider-key'));
- await reveal('模型目录');await click('模型目录');await input('model-catalog-search','mimo');assert.ok(layout().some(n=>(n.text||'').includes('opencode/mimo-v2.6-flash-free')));await shot('ui-real-mimo-catalog');
+ await click('native-back');await waitFor('provider-segments');await reveal('模型目录');await click('模型目录');await input('model-catalog-search','mimo');assert.ok(layout().some(n=>(n.text||'').includes('opencode/mimo-v2.6-flash-free')));await shot('ui-real-mimo-catalog');
  await reveal('兼容渠道');await click('兼容渠道');await click('custom-new');await input('custom-id','mobile-ui-validation');await input('custom-name','Local format check');await input('custom-url','https://api.example.com/v1/chat/completions');await input('custom-models','test');await reveal('custom-save');await click('custom-save');await reveal('兼容渠道');assert.ok(layout().some(n=>(n.text||'').includes('Base URL')));await shot('ui-real-custom-validation');await click('custom-new');await click('back-chat');console.log('PASS API24 real provider catalog, MiMo search, key form and local channel validation; no credential writes.');
 }else if(mode==='providers'){
  await click('open-menu');await click('menu-settings');await pause(1000);assert.ok(find('模型目录'));await click('提供商');await click('quick-deepseek');await reveal('provider-key');assert.ok(find('provider-key'));await shot('ui-provider-key');
- await reveal('模型目录');await click('模型目录');await pause(400);assert.ok(find('model-catalog-search'));assert.ok(layout().some(n=>n.text==='fixture/fixture-coder'));await shot('ui-model-catalog');
+ await click('native-back');await waitFor('provider-segments');await reveal('模型目录');await click('模型目录');await pause(400);assert.ok(find('model-catalog-search'));assert.ok(layout().some(n=>n.text==='fixture/fixture-coder'));await shot('ui-model-catalog');
  await reveal('兼容渠道');await click('兼容渠道');await input('custom-id','mobile-test');await input('custom-name','Native UI');await input('custom-url','https://api.example.com/v1/chat/completions');await input('custom-models','one');await reveal('custom-save');await click('custom-save');await reveal('兼容渠道');assert.ok(layout().some(n=>(n.text||'').includes('Base URL')));await shot('ui-provider-validation');
  await click('custom-new');assert.equal(find('custom-id').text,'');await click('back-chat');console.log('PASS native provider tabs, key form, model catalog and local validation.');
 }else if(mode==='native-new'){

@@ -348,7 +348,8 @@ await test('new channel and server changes clear prior editor values and never c
  store.customName='Old';store.attach(undefined,'/new',async()=>{});assert.equal(store.customName,'');assert.equal(store.catalog.length,0);
 });
 await test('provider quick entry selects the server declared key form and catalog search remains bounded',async()=>{
- const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',supported:true,fields:[]}],accounts:[]}];store.quickSelect('deepseek');assert.equal(store.selected,'deepseek');assert.equal(store.methodType,'key');
+ const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',supported:true,fields:[]}],accounts:[]}];assert.equal(store.quickSelect('deepseek'),true);assert.equal(store.selected,'deepseek');assert.equal(store.methodType,'key');
+ assert.equal(store.quickSelect('unavailable-provider'),false,'An unavailable shortcut must not open the previous provider form');assert.equal(store.search,'unavailable-provider');assert.equal(store.selected,'deepseek');
  store.catalog=Array.from({length:100},(_,i)=>({id:'p/mimo-'+i,label:'MiMo '+i}));store.modelSearch='mimo';assert.equal(store.modelMatches().length,100);assert.equal(store.visibleModels().length,60);store.modelSearch='not present';assert.equal(store.visibleModels().length,0);
 });
 
@@ -585,6 +586,12 @@ await test('reminders: denied permission only disables reminders, not the task f
   assert.equal(notificationsDomain.shouldPublish(prefs,'question','enabled'),true);
   const store=new AppStore();
   assert.equal(store.foreground,true);store.disconnect();assert.equal(store.reminderQuiet,'');
+});
+await test('provider browse page keeps other entries reachable after selecting an authentication target',async()=>{
+ const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',accounts:[],methods:[]},{id:'opencode',name:'OpenCode',accounts:[],methods:[]}];store.selected='deepseek';
+ assert.equal(store.filtered().map(p=>p.id).join(','),'deepseek');
+ assert.equal(store.filtered(false).map(p=>p.id).join(','),'deepseek,opencode');
+ store.search='OpenCode';assert.equal(store.filtered(false).map(p=>p.id).join(','),'opencode');
 });
 console.log(count + ' adapter/state tests passed.');
 

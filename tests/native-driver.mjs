@@ -30,4 +30,4 @@ export async function reveal(q){
 }
 export async function input(q,text){assert.ok(!text.includes("'"));await tap(await reveal(q));cmd('shell','uitest uiInput keyEvent 2072 2017');cmd('shell','uitest uiInput keyEvent 2055');if(text)cmd('shell',"uitest uiInput text '"+text+"'");await pause(350);}
 export async function shot(name){cmd('shell','snapshot_display -f /data/local/tmp/complete-ui.jpeg');cmd('file','recv','/data/local/tmp/complete-ui.jpeg',resolve('.test/'+name+'.jpeg'));}
-export async function menu(name){await tap('open-menu');await tap(name);await pause(1000);}
+export async function menu(name){await tap('open-menu');await tap(await reveal(name));await pause(1000);}

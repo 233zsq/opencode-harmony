@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {tap,wait,find,reveal,menu,input,back,layout,shot,pause,bounds} from './native-driver.mjs';
-const endpoint='http://127.0.0.1:4210';
+const endpoint='http://127.0.0.1:'+(process.env.OPENCODE_FIXTURE_PORT||4210);
 if(find('SkinBgContent'))await back();
 if(!find('model-select'))await back();
 assert.equal(find('model-select')?.text,'本机测试模型','Refusing to edit credentials outside the local fixture.');
@@ -16,7 +16,7 @@ const dismissKeyboard=async()=>{if(find('SkinBgContent'))await back();};
 await menu('项目与会话');await tap('Harmony Fixture');await pause(650);await tap(await reveal('session-ses_fixture'));await wait('chat-input');
 await menu('模型与接入');await tap('quick-deepseek');
 if(process.argv[2]!=='repro'){await tap(await reveal('auth-method-key'));await input('provider-key','fixture-deepseek-key');await dismissKeyboard();}
-await input('provider-search','Xiao');await dismissKeyboard();await tap(await reveal('provider-xiaomi'));layout();
+await wait('native-back');await tap('native-back');await wait('provider-search');await input('provider-search','Xiao');await dismissKeyboard();await tap(await reveal('provider-xiaomi'));layout();
 const card=authCard();assert.ok(card,'Provider configuration card missing');const title=card.children.find(c=>c.attributes.type==='Text')?.attributes.text;
 await shot('provider-selection-reproduction');assert.equal(title,'Xiaomi','Selected Xiaomi row must show Xiaomi authentication form, never DeepSeek.');
 assert.ok(!find('provider-key')||find('provider-key').text==='','Previous provider key must be cleared');

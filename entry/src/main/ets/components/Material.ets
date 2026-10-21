@@ -58,3 +58,18 @@ export struct StatusLed {
       .width(this.ledSize * 3).height(this.ledSize * 3)
   }
 }
+
+// A quiet code mark shared by the welcome screen and sidebar. Static decoration
+// uses semantic colors and does not run an idle animation or shader loop.
+@Component
+export struct CodeMark {
+  @Prop markSize: number = 44;
+  build() {
+    Stack({ alignContent: Alignment.Center }) {
+      Rect().width(this.markSize).height(this.markSize).radius(this.markSize * 0.3).fill(C.accent_soft)
+      SymbolGlyph($r('sys.symbol.code_square')).fontSize(this.markSize * 0.52).fontColor([C.accent])
+      Row().width(this.markSize * 0.2).height(this.markSize * 0.2).backgroundColor(C.accent).borderRadius(999)
+        .position({ x: this.markSize * 0.82, y: this.markSize * 0.02 })
+    }.width(this.markSize).height(this.markSize).accessibilityLevel('no')
+  }
+}
