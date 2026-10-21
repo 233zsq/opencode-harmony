@@ -105,3 +105,10 @@
 - 大字号：`AppScope` 配置跟随系统字体，`fontSizeMaxScale` 上限 1.75；思考/工具/列表/面板/审批/提醒设置改为 `minHeight` 或自适应高度。模拟器“超大”字体下标题、侧栏、审批卡与提醒页无重叠，超过 1.75 的倍率被截断。
 - 无障碍：图标按钮补无障碍名称，思考/审批/模型/Agent/提供商等补展开或选中描述；小控件通过 `responseRegion` 扩到 ≥40vp 热区，视觉尺寸不变。
 - 验证与边界：软键盘/中文候选栏/大字号在 API26 模拟器实测；橫屏、分屏、Pad、API24 与真机输入法仍需设备验收。详见 [MOBILE-USABILITY.md](MOBILE-USABILITY.md)，提醒能力边界见 [NOTIFICATIONS.md](NOTIFICATIONS.md)。
+
+## 浮层材质对齐（2026-10-21）
+
+- 选择模型、工作空间与附件选择统一走同一条 `CustomPopupOptions` + `ImmersiveMaterial`（THIN + lightEffect）渲染路径：同一蒙层、圆角 24、阴影、160ms 透明度动效和系统材质；附件选择由原生 `bindMenu` 改为自定义浮层（`.bindPopup`），保留 `attachment-photos` / `attachment-files` 控件 ID 及系统相册、文件选择器行为。
+- 附件浮层内容与模型浮层使用同一套标题/说明排版；点击行先关闭浮层再打开系统选择器，返回和点浮层外均可关闭；浮层打开时不误触下层会话。
+- 系统相册/文件选择器属于系统 UI，应用无法修改其材质；本次统一的是应用内的附件选择入口浮层。
+- 验证：ArkTS 构建/签名/安装通过；API26 模拟器实测附件浮层与模型浮层同材质、系统相册和文件选择器可打开、返回/点外关闭正常。

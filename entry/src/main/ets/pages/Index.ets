@@ -115,6 +115,7 @@ struct Index {
   @State pickingAttachments: boolean = false;
   @State selectedAttachment: Attachment = { id: '', name: '', mime: '', data: '', size: 0 };
   private async pickAttachments(photos: boolean, retry?: Attachment): Promise<void> {
+    this.attachmentPopupOpen = false;
     if (this.pickingAttachments || this.store.pendingSend || this.store.busy || !this.store.sessionID) { return; }
     const scope = this.store.connected + '/' + this.store.directory + '/' + this.store.sessionID;
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -141,6 +142,7 @@ struct Index {
   @State viewportHeight: number = 800;
   @State @Watch('conversationVisibilityChanged') modelPopupOpen: boolean = false;
   @State @Watch('conversationVisibilityChanged') workspacePopupOpen: boolean = false;
+  @State @Watch('conversationVisibilityChanged') attachmentPopupOpen: boolean = false;
   @State private chatHeadingHeight: number = 46;
   @State private composerHeight: number = 72;
   @State private modelMaterial: SystemUiMaterial | undefined = undefined;
@@ -179,8 +181,8 @@ struct Index {
     }
   }
   aboutToDisappear(): void { if (this.scrollTimer >= 0) { clearTimeout(this.scrollTimer); this.scrollTimer = -1; } this.store.setActive(false); }
-  private closePopups(): void { this.modelPopupOpen = false; this.workspacePopupOpen = false; }
-  onBackPress(): boolean { if (this.workspacePopupOpen) { this.workspacePopupOpen = false; return true; } if (this.modelPopupOpen) { this.closePopups(); return true; } if (this.toolSheetOpen) { this.closePanel(); return true; } if (this.sidebarOpen) { this.dismissKeyboard(); this.sidebarOpen = false; return true; } return false; }
+  private closePopups(): void { this.modelPopupOpen = false; this.workspacePopupOpen = false; this.attachmentPopupOpen = false; }
+  onBackPress(): boolean { if (this.attachmentPopupOpen) { this.attachmentPopupOpen = false; return true; } if (this.workspacePopupOpen) { this.workspacePopupOpen = false; return true; } if (this.modelPopupOpen) { this.closePopups(); return true; } if (this.toolSheetOpen) { this.closePanel(); return true; } if (this.sidebarOpen) { this.dismissKeyboard(); this.sidebarOpen = false; return true; } return false; }
   private storeChanged(): void {
     if (this.store.reminderQuietSeq !== this.quietSeq) {
       this.quietSeq = this.store.reminderQuietSeq;
@@ -216,7 +218,8 @@ struct Index {
   }
   private conversationVisibilityChanged(): void {
     if (!this.sidebarOpen && this.workspacePopupOpen) { this.workspacePopupOpen = false; }
-    this.store.conversationVisible = (!this.sidebarOpen || this.wide) && !this.toolSheetOpen && !this.modelPopupOpen && !this.workspacePopupOpen;
+    if (this.sidebarOpen) { this.attachmentPopupOpen = false; }
+    this.store.conversationVisible = (!this.sidebarOpen || this.wide) && !this.toolSheetOpen && !this.modelPopupOpen && !this.workspacePopupOpen && !this.attachmentPopupOpen;
   }
   private showActions(): void { this.navigate('more'); }
   private dismissKeyboard(): void { try { this.getUIContext().getFocusController().clearFocus(); } catch (_) { } }
@@ -722,7 +725,8 @@ struct Index {
           Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.plus')).fontSize(18).fontColor([C.secondary]) }
             .id('attachment-add').accessibilityText('添加附件').width(40).height(40).padding(0).margin({ bottom: 1 }).backgroundColor(Color.Transparent)
             .enabled(!!this.store.sessionID && !this.store.busy && !this.store.pendingSend && !this.pickingAttachments)
-            .bindMenu(this.attachmentMenu(), this.glassMenuOptions())
+            .onClick(() => { this.dismissKeyboard(); this.store.error = ''; this.modelPopupOpen = false; this.workspacePopupOpen = false; this.attachmentPopupOpen = !this.attachmentPopupOpen; })
+            .bindPopup(this.attachmentPopupOpen, this.surfacePopupOptions('attachment'))
           TextArea({ placeholder: this.store.sessionID ? '发消息，或描述一个任务…' : '选择项目后开始对话', text: this.store.draft }).id('chat-input')
             .minLines(1).maxLines(5).constraintSize({ minHeight: 42, maxHeight: 148 }).maxLength(20000).layoutWeight(1).fontSize(15).fontWeight(FontWeight.Normal).lineHeight(22)
             .padding({ left: 0, right: 0, top: 10, bottom: 10 }).fontColor(C.text).placeholderColor(C.muted).caretColor(C.accent)
@@ -908,7 +912,7 @@ struct Index {
         }.width('100%')
       }.id('sidebar-workspace').width('100%').height(44).padding({ left: 14, right: 14 }).margin({ top: 8 })
         .backgroundColor(C.glass_fill).border({ width: 0.5, color: C.glass_stroke }).borderRadius(16)
-        .accessibilityText('打开工作空间').onClick(() => { this.dismissKeyboard(); this.modelPopupOpen = false; this.workspacePopupOpen = !this.workspacePopupOpen; })
+        .accessibilityText('打开工作空间').onClick(() => { this.dismissKeyboard(); this.modelPopupOpen = false; this.attachmentPopupOpen = false; this.workspacePopupOpen = !this.workspacePopupOpen; })
         .bindPopup(this.workspacePopupOpen, this.surfacePopupOptions('workspace'))
       Row({ space: 10 }) {
         Stack() {
@@ -931,12 +935,28 @@ struct Index {
       .shadow({ radius: 22, color: C.glass_shadow, offsetX: 8, offsetY: 0 })
   }
   @Builder
-  attachmentMenu() {
-    Menu() {
-      MenuItem({ content: '选择照片' }).id('attachment-photos').enabled(this.store.attachmentInput().indexOf('image') >= 0).onClick(() => { this.pickAttachments(true); })
-      MenuItem({ content: '选择文件' }).id('attachment-files').onClick(() => { this.pickAttachments(false); })
-      MenuItem({ content: '最多 4 个，合计 1 MB；图片会压缩' }).enabled(false)
-    }
+  attachmentPopup() {
+    Column({ space: 0 }) {
+      Button({ type: ButtonType.Normal }) {
+        Column({ space: 4 }) {
+          Text('选择照片').fontSize(15).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+          Text('从相册添加，图片会压缩').fontSize(12).fontColor(C.secondary).width('100%')
+        }.alignItems(HorizontalAlign.Start).width('100%')
+      }.id('attachment-photos').width('100%').constraintSize({ minHeight: 62 }).padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .backgroundColor(Color.Transparent).borderRadius(12).enabled(this.store.attachmentInput().indexOf('image') >= 0)
+        .accessibilityText('选择照片')
+        .onClick(() => { this.attachmentPopupOpen = false; this.pickAttachments(true); })
+      Button({ type: ButtonType.Normal }) {
+        Column({ space: 4 }) {
+          Text('选择文件').fontSize(15).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+          Text('从文件管理器添加').fontSize(12).fontColor(C.secondary).width('100%')
+        }.alignItems(HorizontalAlign.Start).width('100%')
+      }.id('attachment-files').width('100%').constraintSize({ minHeight: 62 }).padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .backgroundColor(Color.Transparent).borderRadius(12).accessibilityText('选择文件')
+        .onClick(() => { this.attachmentPopupOpen = false; this.pickAttachments(false); })
+      Divider().color(C.separator).margin({ left: 14, right: 14, top: 2, bottom: 2 })
+      Text('最多 4 个，合计 1 MB；图片会压缩').fontSize(11).fontColor(C.muted).padding({ left: 14, right: 14, top: 6, bottom: 8 }).width('100%')
+    }.id('attachment-picker').width('100%').padding({ left: 8, right: 8, top: 8, bottom: 8 }).backgroundColor(Color.Transparent).borderRadius(22)
   }
   @Builder
   sheetContent() { this.panelContent(this.sheetKind) }
@@ -1236,14 +1256,17 @@ struct Index {
       .borderRadius(14).enabled(enabled).onClick(() => { this.navigate(pane); })
   }
   private surfacePopupOptions(kind: string): CustomPopupOptions {
-    const options: CustomPopupOptions = { builder: (): void => { if (kind === 'workspace') { this.workspacePopup(); } else { this.quickModelPopup(); } },
-      placement: kind === 'workspace' ? Placement.TopLeft : Placement.BottomLeft, enableArrow: false,
-      width: Math.min(300, this.viewportWidth - 40), targetSpace: 8, offset: { x: kind === 'workspace' ? 0 : -40, y: 0 }, radius: 24,
+    const isWorkspace: boolean = kind === 'workspace';
+    const isAttachment: boolean = kind === 'attachment';
+    const options: CustomPopupOptions = {
+      builder: (): void => { if (isWorkspace) { this.workspacePopup(); } else if (isAttachment) { this.attachmentPopup(); } else { this.quickModelPopup(); } },
+      placement: isWorkspace || isAttachment ? Placement.TopLeft : Placement.BottomLeft, enableArrow: false,
+      width: Math.min(300, this.viewportWidth - 40), targetSpace: 8, offset: { x: isWorkspace || isAttachment ? 0 : -40, y: 0 }, radius: 24,
       popupColor: C.glass_strong, backgroundBlurStyle: BlurStyle.COMPONENT_THICK, shadow: ShadowStyle.OUTER_DEFAULT_MD,
       mask: { color: '#0A000000' }, autoCancel: true, focusable: false,
-      onWillDismiss: (action): void => { action.dismiss(); if (kind === 'workspace') { this.workspacePopupOpen = false; } else { this.modelPopupOpen = false; } },
+      onWillDismiss: (action): void => { action.dismiss(); if (isWorkspace) { this.workspacePopupOpen = false; } else if (isAttachment) { this.attachmentPopupOpen = false; } else { this.modelPopupOpen = false; } },
       transition: TransitionEffect.OPACITY.animation({ duration: 160, curve: Curve.EaseOut }),
-      onStateChange: (event): void => { if (!event.isVisible) { if (kind === 'workspace') { this.workspacePopupOpen = false; } else { this.modelPopupOpen = false; } } } };
+      onStateChange: (event): void => { if (!event.isVisible) { if (isWorkspace) { this.workspacePopupOpen = false; } else if (isAttachment) { this.attachmentPopupOpen = false; } else { this.modelPopupOpen = false; } } } };
     if (deviceInfo.sdkApiVersion >= 26) {
       if (deviceInfo.apiAvailable('26.0.0')) { if (this.modelMaterial) { options.systemMaterial = this.modelMaterial; options.focusable = true; } }
     }
@@ -1281,7 +1304,7 @@ struct Index {
           .constraintSize({ maxWidth: 220 })
           .width(Math.min(220, Math.max(96, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))))
           .enabled(!!this.store.sessionID && !this.store.busy).accessibilityText('选择对话模型')
-          .onClick(() => { this.dismissKeyboard(); this.store.error = ''; this.workspacePopupOpen = false; this.modelPopupOpen = !this.modelPopupOpen; })
+          .onClick(() => { this.dismissKeyboard(); this.store.error = ''; this.workspacePopupOpen = false; this.attachmentPopupOpen = false; this.modelPopupOpen = !this.modelPopupOpen; })
           .bindPopup(this.modelPopupOpen, this.surfacePopupOptions('model'))
       } else { Text('OpenCode').fontSize(15).fontWeight(FontWeight.Bold).fontColor(C.text).layoutWeight(1) }
       Blank().layoutWeight(1)
