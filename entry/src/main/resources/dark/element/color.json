@@ -2,47 +2,47 @@
   "color": [
     {
       "name": "ui_page",
-      "value": "#101C1E"
+      "value": "#101214"
     },
     {
       "name": "ui_surface",
-      "value": "#17272A"
+      "value": "#191C20"
     },
     {
       "name": "ui_field",
-      "value": "#203337"
+      "value": "#24282E"
     },
     {
       "name": "ui_sidebar",
-      "value": "#142326"
+      "value": "#171A1F"
     },
     {
       "name": "ui_text",
-      "value": "#E8F3EE"
+      "value": "#F1F3F5"
     },
     {
       "name": "ui_secondary",
-      "value": "#BCCEC7"
+      "value": "#BCC4D0"
     },
     {
       "name": "ui_muted",
-      "value": "#B2C5BC"
+      "value": "#AFB9C7"
     },
     {
       "name": "ui_accent",
-      "value": "#8CDBC0"
+      "value": "#87B6FF"
     },
     {
       "name": "ui_accent_soft",
-      "value": "#243F38"
+      "value": "#20324D"
     },
     {
       "name": "ui_separator",
-      "value": "#2B4241"
+      "value": "#30363E"
     },
     {
       "name": "ui_bubble",
-      "value": "#233A35"
+      "value": "#263142"
     },
     {
       "name": "ui_warning",
@@ -78,15 +78,15 @@
     },
     {
       "name": "ui_code_bg",
-      "value": "#0C161A"
+      "value": "#0D1117"
     },
     {
       "name": "ui_code_text",
-      "value": "#D2E6DE"
+      "value": "#DFE7F1"
     },
     {
       "name": "start_window_background",
-      "value": "#101C1E"
+      "value": "#101214"
     },
     {
       "name": "ui_on_accent",
@@ -94,27 +94,27 @@
     },
     {
       "name": "ui_btn",
-      "value": "#8CDBC0"
+      "value": "#87B6FF"
     },
     {
       "name": "ui_btn_text",
-      "value": "#102B24"
+      "value": "#091A33"
     },
     {
       "name": "ui_glass_fill",
-      "value": "#F017272A"
+      "value": "#F2171B21"
     },
     {
       "name": "ui_glass_strong",
-      "value": "#F01A2D2E"
+      "value": "#F21C2027"
     },
     {
       "name": "ui_glass_stroke",
-      "value": "#3F5A50"
+      "value": "#363D47"
     },
     {
       "name": "ui_glass_highlight",
-      "value": "#268CDBC0"
+      "value": "#26FFFFFF"
     },
     {
       "name": "ui_glass_shadow",
@@ -122,7 +122,7 @@
     },
     {
       "name": "ui_sheet_tint",
-      "value": "#F017272A"
+      "value": "#FA191D24"
     },
     {
       "name": "ui_sheet_scrim",
@@ -138,15 +138,15 @@
     },
     {
       "name": "ui_chip",
-      "value": "#1D302F"
+      "value": "#242B35"
     },
     {
       "name": "ui_hero_glow",
-      "value": "#234137"
+      "value": "#1C293B"
     },
     {
       "name": "ui_hero_edge",
-      "value": "#29332C"
+      "value": "#101214"
     }
   ]
 }

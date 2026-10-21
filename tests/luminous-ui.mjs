@@ -7,7 +7,7 @@ if(find('SkinBgContent'))await back();
 assert.equal(find('model-select')?.text,'本机测试模型','Select the local fixture first.');
 const state=async()=>await(await fetch(endpoint+'/__test/state')).json();
 const writes=(await state()).receipts.filter(r=>r.path.endsWith('/prompt')).length;
-await tap('model-select');await wait('model-picker');await wait('native-back');await shot('luminous-models');await tap('native-back');await wait('chat-input');await pause(700);
+await tap('model-select');await wait('model-quick-picker');await pause(700);await tap('model-show-all');await wait('model-picker');await wait('native-back');await shot('luminous-models');await tap('native-back');await wait('chat-input');await pause(700);
 await tap('agent-select');await wait('agent-picker');await wait('native-back');await shot('luminous-agents');await tap('native-back');await wait('chat-input');await pause(700);
 await tap('open-menu');await wait('more-functions-page');await wait('native-back');await shot('luminous-more');
 for(const [id,panel]of[['open-usage','usage-panel'],['open-fork','fork-panel'],['open-export','export-panel']]){
@@ -23,9 +23,11 @@ await tap('open-sidebar');await wait('close-sidebar');await shot('luminous-sideb
 await menu('外观');const appearance=find('外观')&&layout().find(n=>n.text?.startsWith('当前外观：'))?.text;
 const original=appearance?.slice(5);assert.ok(['跟随系统','浅色','深色'].includes(original),'Original appearance must be readable.');
 try{
- await tap('深色');await pause(700);await back();await tap('model-select');await wait('model-picker');await shot('luminous-dark-models');await back();
+ await tap('深色');await pause(700);await back();await tap('model-select');await wait('model-quick-picker');await pause(700);await tap('model-show-all');await wait('model-picker');await shot('luminous-dark-models');await back();
  await menu('外观');await tap('浅色');await pause(700);await back();
- await tap('open-menu');await wait('more-functions-page');await shot('luminous-more');await back();
+ await tap('model-select');await wait('model-quick-picker');await pause(700);await shot('harmony-light-popup');await back();
+ await tap('open-sidebar');await wait('history-sidebar');await shot('harmony-light-sidebar');await back();
+ await tap('open-menu');await wait('more-functions-page');await shot('harmony-light-more');await back();
 }finally{await menu('外观');await tap(original);await back();}
 assert.equal((await state()).receipts.filter(r=>r.path.endsWith('/prompt')).length,writes,'UI inspection must not submit a prompt.');
 console.log('PASS native model/Agent/usage/fork/export/tool destinations, parent return, thinking collapse, live tool update, sidebar and both themes; no prompt submitted.');

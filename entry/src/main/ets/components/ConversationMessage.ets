@@ -47,7 +47,7 @@ export struct ConversationMessage {
         Blank().layoutWeight(1)
         Button('编辑').id('edit-fork-' + this.message.id).accessibilityText('编辑这条消息并分叉').buttonStyle(ButtonStyleMode.TEXTUAL).height(28).constraintSize({ minWidth: 28 }).padding(0).fontSize(13).fontColor(C.muted).margin({ right: 6, top: 5 })
           .responseRegion({ x: -6, y: -6, width: 40, height: 40 }).onClick(() => { this.onFork(true); })
-        Text(this.message.text).id('message-user-' + this.message.id).fontSize(16).lineHeight(27).fontColor(C.text)
+        Text(this.message.text).id('message-user-' + this.message.id).fontSize(15).lineHeight(25).fontColor(C.text)
           .padding({ left: 15, right: 15, top: 12, bottom: 12 }).backgroundColor(C.bubble)
           .borderRadius({ topLeft: 14, topRight: 14, bottomRight: 4, bottomLeft: 14 })
           .constraintSize({ maxWidth: '88%' }).wordBreak(WordBreak.BREAK_WORD).copyOption(CopyOptions.InApp)
@@ -101,7 +101,7 @@ export struct ConversationMessage {
               if (index > 0) { Divider().color(C.separator).margin({ left: 10, right: 10 }) }
               Row({ space: 8 }) {
                 SymbolGlyph(tool.status === 'error' || tool.status === 'failed' ? $r('sys.symbol.exclamationmark_circle') : $r('sys.symbol.code_square')).fontSize(14).fontColor([tool.status === 'error' || tool.status === 'failed' ? C.danger : C.secondary])
-                Text(this.label(tool)).fontSize(16).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: 90 })
+                Text(this.label(tool)).fontSize(14).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: 90 })
                 Text(this.summary(tool)).fontSize(12.5).fontFamily('monospace').fontColor(C.muted).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
                 Text(toolStatus(tool.status)).fontSize(12).fontFamily('monospace').letterSpacing(1.2).maxLines(1).fontColor(this.stateColor(tool.status))
                 SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.muted])

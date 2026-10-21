@@ -14,8 +14,8 @@ export struct ModelPicker {
   onManage: () => void = (): void => {};
   aboutToAppear(): void { this.query = ''; this.limit = 40; }
   build() {
-    Column({ space: 16 }) {
-      TextInput({ placeholder: '搜索模型名称、渠道或模型 ID', text: this.query }).id('model-search').maxLength(120).constraintSize({ minHeight: 48 }).fontSize(16)
+    Column({ space: 12 }) {
+      TextInput({ placeholder: '搜索模型名称、渠道或模型 ID', text: this.query }).id('model-search').maxLength(120).constraintSize({ minHeight: 44 }).fontSize(15)
         .backgroundColor(C.field).borderRadius(14).placeholderColor(C.muted).accessibilityText('搜索模型')
         .enabled(!this.busy).onChange((value: string) => { this.query = value; this.limit = 40; })
       if (this.error) { Text(this.error).id('model-switch-error').fontSize(15).fontColor(C.danger).width('100%') }
@@ -26,17 +26,17 @@ export struct ModelPicker {
             Row({ space: 10 }) {
               Row().width(2.5).height(30).borderRadius(2).backgroundColor(model.id === this.current ? C.accent : Color.Transparent)
               Column({ space: 6 }) {
-                Text(model.label).fontSize(17).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(2)
+                Text(model.label).fontSize(15).fontWeight(FontWeight.Medium).fontColor(C.text).maxLines(2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-                Text(model.id).fontSize(12).fontFamily('monospace').fontColor(C.muted).letterSpacing(0.3).maxLines(2)
+                Text(model.id).fontSize(11).fontFamily('monospace').fontColor(C.muted).letterSpacing(0.3).maxLines(2)
                   .wordBreak(WordBreak.BREAK_ALL).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-                Text(modelInputs(model)).fontSize(15).fontColor(C.secondary).maxLines(2)
+                Text(modelInputs(model)).fontSize(12).fontColor(C.secondary).maxLines(2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
               if (model.id === this.current) { SymbolGlyph($r('sys.symbol.checkmark')).fontSize(14).fontColor([C.accent]).accessibilityLevel('no') }
-            }.id('model-option-' + model.id).padding({ left: 10, right: 10, top: 16, bottom: 16 }).width('100%')
+            }.id('model-option-' + model.id).padding({ left: 10, right: 10, top: 12, bottom: 12 }).width('100%')
               .constraintSize({ minHeight: 44 })
-              .backgroundColor(model.id === this.current ? C.accent_soft : C.surface).borderRadius(18)
+              .backgroundColor(model.id === this.current ? C.accent_soft : C.surface).borderRadius(14)
               .border({ width: 1, color: C.separator })
               .accessibilityChecked(model.id === this.current)
               .accessibilityDescription(model.id === this.current ? '当前已选模型' : '')

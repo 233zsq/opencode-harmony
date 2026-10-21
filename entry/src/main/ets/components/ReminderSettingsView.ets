@@ -12,7 +12,7 @@ struct ReminderSwitchRow {
   build() {
     Row({ space: 12 }) {
       Column({ space: 3 }) {
-        Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+        Text(this.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
         Text(this.detail).fontSize(13).lineHeight(21).fontColor(C.muted).width('100%')
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       Toggle({ type: ToggleType.Switch, isOn: this.checked })
@@ -69,11 +69,11 @@ export struct ReminderSettingsView {
     Scroll() {
       Column({ space: 14 }) {
         Column({ space: 4 }) {
-          Text('提醒设置').fontSize(19).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+          Text('提醒设置').fontSize(18).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
           Text('REMINDERS / SYSTEM NOTIFICATIONS').fontSize(12).fontFamily('monospace')
             .letterSpacing(1.2).fontColor(C.muted).width('100%')
           Text('当任务结束或出现需要处理的事项时提醒我。通知只显示通用状态，不包含聊天正文、会话标题、代码或路径。')
-            .fontSize(15).lineHeight(23).fontColor(C.secondary).width('100%')
+            .fontSize(14).lineHeight(23).fontColor(C.secondary).width('100%')
         }.width('100%').alignItems(HorizontalAlign.Start)
 
         this.sectionLabel('提醒类型')
@@ -96,7 +96,7 @@ export struct ReminderSettingsView {
         Column({ space: 10 }) {
           Row({ space: 10 }) {
             Column({ space: 3 }) {
-              Text('通知权限').fontSize(17).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+              Text('通知权限').fontSize(16).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
               Text(this.permissionLabel()).id('reminder-permission').fontSize(13)
                 .fontColor(this.permission === 'enabled' ? C.success : this.permission === 'unsupported' ? C.muted : C.warning)
                 .width('100%')
@@ -104,7 +104,7 @@ export struct ReminderSettingsView {
           }.width('100%')
           if (this.permission !== 'enabled' && this.permission !== 'unsupported') {
             Button(this.requestLabel(), { type: ButtonType.Normal }).id('reminder-request')
-              .width('100%').constraintSize({ minHeight: 48 }).fontSize(15).fontWeight(FontWeight.Medium)
+              .width('100%').constraintSize({ minHeight: 48 }).fontSize(14).fontWeight(FontWeight.Medium)
               .backgroundColor(C.btn).fontColor(C.btn_text).borderRadius(14)
               .enabled(this.ready && !this.requesting)
               .accessibilityText(this.permissionRequested ? '打开系统通知设置' : '申请通知权限')
@@ -120,10 +120,10 @@ export struct ReminderSettingsView {
 
         this.sectionLabel('提醒范围与限制')
         Column({ space: 6 }) {
-          Text('正在查看的对话：只在应用内显示安静提示，不弹出系统通知。').fontSize(15).lineHeight(23).fontColor(C.secondary).width('100%')
-          Text('其他对话，或应用不在前台但进程仍存活时：短暂尽力发送系统通知；系统冻结后停止接收。').fontSize(15).lineHeight(23).fontColor(C.secondary).width('100%')
-          Text('退到后台后连接只短暂保留；系统冻结或进程退出后不会收到提醒。未接入 Push，也不常驻后台、不轮询、不保活。').fontSize(15).lineHeight(23).fontColor(C.secondary).width('100%')
-          Text('点按通知会回到对应服务器、项目和会话；当前未发送的草稿会保留。').fontSize(15).lineHeight(23).fontColor(C.secondary).width('100%')
+          Text('正在查看的对话：只在应用内显示安静提示，不弹出系统通知。').fontSize(14).lineHeight(23).fontColor(C.secondary).width('100%')
+          Text('其他对话，或应用不在前台但进程仍存活时：短暂尽力发送系统通知；系统冻结后停止接收。').fontSize(14).lineHeight(23).fontColor(C.secondary).width('100%')
+          Text('退到后台后连接只短暂保留；系统冻结或进程退出后不会收到提醒。未接入 Push，也不常驻后台、不轮询、不保活。').fontSize(14).lineHeight(23).fontColor(C.secondary).width('100%')
+          Text('点按通知会回到对应服务器、项目和会话；当前未发送的草稿会保留。').fontSize(14).lineHeight(23).fontColor(C.secondary).width('100%')
         }.id('reminder-capability').width('100%').padding(14).backgroundColor(C.surface)
           .border({ width: 1, color: C.separator }).borderRadius(16)
 

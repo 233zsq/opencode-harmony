@@ -12,7 +12,12 @@ export function layout(){cmd('shell','uitest dumpLayout -i -p /data/local/tmp/co
 const aliases={'open-menu':'__NavigationField__NavigationMenu__MenuItem2__native-navigation','native-back':'__NavdestinationField__BackButton__Back__native-destination'};
 export const find=(q,nodes=layout())=>nodes.findLast(n=>n.visible!=='false'&&bounds(n)[2]>0&&bounds(n)[0]>=0&&bounds(n)[3]>0&&bounds(n)[1]<2832&&(n.id===q||n.text===q||(aliases[q]&&n.id===aliases[q])||(q==='open-sidebar'&&n.parent==='native-sidebar-container'&&n.type==='Button')));
 export async function wait(q,timeout=14000){const end=Date.now()+timeout;do{const n=find(q);if(n)return n;await pause(300);}while(Date.now()<end);throw new Error('Native control missing: '+q);}
-export async function tap(q){const n=typeof q==='string'?await wait(q):q;assert.ok(n);const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(450);}
+export async function tap(q){
+ let n=typeof q==='string'?await wait(q):q;assert.ok(n);const key=typeof q==='string'?q:n.id||n.text;
+ const end=Date.now()+14000;while(n.enabled==='false'&&Date.now()<end){await pause(250);n=find(key)||n;}
+ assert.notEqual(n.enabled,'false','Native control is disabled: '+key);
+ const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(450);
+}
 export async function back(){cmd('shell','uitest uiInput keyEvent Back');await pause(1300);}
 export async function reveal(q){
  for(let i=0;i<22;i++){

@@ -57,7 +57,7 @@ export struct MarkdownText {
         } else {
           Text() {
             ForEach(inlineMarkdown(block.text), (part: InlinePart) => {
-              Span(part.text).fontSize(part.kind === 'code' ? 13 : block.kind === 'heading' ? (block.level === 1 ? 22 : block.level === 2 ? 19 : 17) : block.kind === 'notice' ? 13 : 16)
+              Span(part.text).fontSize(part.kind === 'code' ? 13 : block.kind === 'heading' ? (block.level === 1 ? 21 : block.level === 2 ? 18 : 16) : block.kind === 'notice' ? 12 : 15)
                 .fontWeight(part.kind === 'bold' || part.strong || block.kind === 'heading' ? FontWeight.Bold : FontWeight.Normal)
                 .fontFamily(part.kind === 'code' ? 'monospace' : 'sans-serif').fontStyle(part.emphasis ? FontStyle.Italic : FontStyle.Normal)
                 .decoration({ type: part.strike ? TextDecorationType.LineThrough : TextDecorationType.None })
@@ -65,10 +65,10 @@ export struct MarkdownText {
                 .textBackgroundStyle({ color: part.kind === 'code' ? C.field : Color.Transparent, radius: part.kind === 'code' ? 4 : 0 })
                 .onClick(() => { if (part.kind === 'link' && part.url) { this.onOpenLink(part.url); } })
             }, (part: InlinePart) => part.id + part.text)
-          }.fontSize(block.kind === 'heading' ? (block.level === 1 ? 22 : block.level === 2 ? 19 : 17) : block.kind === 'notice' ? 13 : 16)
+          }.fontSize(block.kind === 'heading' ? (block.level === 1 ? 21 : block.level === 2 ? 18 : 16) : block.kind === 'notice' ? 12 : 15)
             .fontWeight(block.kind === 'heading' ? FontWeight.Bold : FontWeight.Normal)
             .fontColor(block.kind === 'quote' ? C.secondary : block.kind === 'notice' ? C.muted : C.text)
-            .lineHeight(block.kind === 'heading' ? (block.level === 1 ? 31 : block.level === 2 ? 28 : 25) : block.kind === 'notice' ? 21 : 27).width('100%').wordBreak(WordBreak.BREAK_WORD).copyOption(CopyOptions.InApp)
+            .lineHeight(block.kind === 'heading' ? (block.level === 1 ? 29 : block.level === 2 ? 26 : 24) : block.kind === 'notice' ? 20 : 25).width('100%').wordBreak(WordBreak.BREAK_WORD).copyOption(CopyOptions.InApp)
             .padding({ left: block.kind === 'list' ? (block.depth || 0) * 14 : block.kind === 'quote' ? 10 : 0 })
             .border({ width: { left: block.kind === 'quote' ? 2 : 0 }, color: C.separator })
         }

@@ -1,0 +1,24 @@
+// Native popup acceptance; all writes require the explicitly selected loopback fixture.
+import assert from 'node:assert/strict';
+import {tap,find,wait,back,pause,input,layout,bounds,cmd,shot,menu} from './native-driver.mjs';
+const endpoint='http://127.0.0.1:'+(process.env.OPENCODE_FIXTURE_PORT||4210),density=Number(process.env.UI_DENSITY||3.5);
+await wait('本机测试模型',45000);assert.equal(find('model-select')?.text,'本机测试模型','Select the local fixture first.');
+const state=async()=>await(await fetch(endpoint+'/__test/state')).json();
+const posts=async()=>(await state()).receipts.filter(r=>r.method==='POST'&&r.path.endsWith('/model'));
+const baseline=(await posts()).length,prompts=(await state()).receipts.filter(r=>r.path.endsWith('/prompt')).length;
+await tap('model-select');await wait('model-quick-picker');await pause(700);assert.ok(!find('model-picker'));assert.ok(!find('native-back'));
+const nodes=layout(),popup=bounds(find('model-quick-picker',nodes)),anchor=bounds(find('model-select',nodes));
+assert.ok(popup[1]>=anchor[3]-2*density&&popup[1]<=anchor[3]+40*density,'Popup must open immediately below the model control.');
+assert.ok((popup[2]-popup[0])/density<=322,'Popup should stay a compact floating surface.');
+assert.ok((popup[3]-popup[1])/density<480,'Popup must leave the conversation visible.');
+await shot('harmony-model-popup');
+const screen=bounds(nodes.find(n=>n.type==='root'));cmd('shell','uitest uiInput click '+(screen[2]-8)+' '+(screen[3]-120));await pause(700);assert.ok(!find('model-quick-picker'));assert.equal((await posts()).length,baseline,'Outside dismissal must not switch the model');
+await tap('model-select');await tap('quick-model-option-fixture/fixture-coder');await pause(700);assert.ok(!find('model-quick-picker'));assert.equal((await posts()).length,baseline,'Current model selection must not submit again');
+await tap('model-select');await wait('model-quick-picker');await pause(700);const choice=layout().find(n=>n.visible!=='false'&&n.id?.startsWith('quick-model-option-')&&!n.id.endsWith('fixture/fixture-coder'));assert.ok(choice);const id=choice.id.slice('quick-model-option-'.length);
+await fetch(endpoint+'/__test/model-failure?enabled=1',{method:'POST'});await tap(choice);await wait('quick-model-error');assert.ok(find('model-quick-picker'));assert.equal((await state()).model.id,'fixture-coder');await shot('harmony-model-popup-error');
+await fetch(endpoint+'/__test/model-failure?enabled=0',{method:'POST'});await tap('quick-model-option-'+id);await pause(900);assert.ok(!find('model-quick-picker'));assert.equal((await posts()).length,baseline+2);const slash=id.indexOf('/');assert.deepEqual((await posts()).at(-1).input,{model:{providerID:id.slice(0,slash),id:id.slice(slash+1)}});
+await tap('model-select');await wait('model-quick-picker');await pause(700);await tap('model-show-all');await wait('model-picker');await wait('native-back');await input('model-search','fixture-coder');if(find('SkinBgContent'))await back();await tap('model-option-fixture/fixture-coder');await wait('本机测试模型');
+await tap('model-select');await wait('model-quick-picker');await pause(700);await back();assert.ok(!find('model-quick-picker'));assert.equal((await posts()).length,baseline+3);
+await tap('open-sidebar');await wait('history-sidebar');const sidebar=bounds(find('history-sidebar'));assert.ok((sidebar[2]-sidebar[0])/(screen[2]-screen[0])<=.76,'Phone sidebar must leave a clear part of the conversation visible');assert.ok((sidebar[2]-sidebar[0])/density>=220);await shot('harmony-sidebar');await back();await menu('外观');await shot('harmony-appearance');await tap('native-back');await tap('open-menu');await wait('more-functions-page');await shot('harmony-more');await tap('native-back');
+assert.equal((await state()).receipts.filter(r=>r.path.endsWith('/prompt')).length,prompts);
+console.log('PASS native anchored popup bounds, outside/back dismissal, no-op current option, rejection/retry, exact model identity and complete search handoff; no prompt submitted.');

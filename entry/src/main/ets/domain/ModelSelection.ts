@@ -21,3 +21,17 @@ export function modelInputs(model: ModelItem): string {
   if ((model.input || []).indexOf('pdf') >= 0) { inputs.push('PDF'); }
   return inputs.join(' · ');
 }
+
+// A small server-backed shortlist; the full searchable catalog is always reachable.
+export function quickModels(models: ModelItem[], current: string): ModelItem[] {
+  const catalog = matchingModels(models, '', current);
+  const selected: ModelItem[] = [];
+  const add = (model: ModelItem | undefined): void => {
+    if (model && selected.length < 3 && !selected.some((item: ModelItem) => item.id === model.id)) { selected.push(model); }
+  };
+  add(catalog.find((model: ModelItem) => model.id === current));
+  add(catalog.find((model: ModelItem) => /mimo/i.test(model.id + ' ' + model.label)));
+  add(catalog.find((model: ModelItem) => /deepseek/i.test(model.id + ' ' + model.label)));
+  for (const model of catalog) { if (selected.length >= 3) { break; } add(model); }
+  return selected;
+}
