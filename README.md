@@ -79,6 +79,8 @@ Python设置服务的11项测试使用Linux运行 `python3 tests/mobile_settings
 
 测试从本机 SDK 读取 TypeScript 转译器，不需要下载测试依赖。状态测试运行真实客户端逻辑，只替换平台接口。审批服务端修复、部署与原生失败恢复验收见 [APPROVALS.md](docs/APPROVALS.md)。
 
+悬浮标题、输入区和工作空间二级入口见 [FLOATING-CHAT.md](docs/FLOATING-CHAT.md)。
+
 ## 本机联调服务
 
 tests/fake-server.mjs 是明确标识的本地测试 fixture，不是生产 OpenCode，也不执行真实 Agent。

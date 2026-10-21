@@ -10,7 +10,7 @@ await pause(1800);await tap('open-sidebar');await wait('history-list');await pau
 await tap('history-filter');await tap('history-refresh');await pause(1500);
 let nodes=layout(),side=bounds(find('history-sidebar',nodes)),list=bounds(find('history-list',nodes)),screen=bounds(nodes.find(n=>n.type==='root'));
 const ratio=(side[2]-side[0])/(screen[2]-screen[0]);assert.ok(ratio>=.80&&ratio<=.86,'Sidebar should use ~84% of the phone width');
-assert.ok((list[3]-list[1])/(side[3]-side[1])>=.72,'History should own most of the sidebar height');
+assert.ok((list[3]-list[1])/(side[3]-side[1])>=.66,'History should retain two thirds of the sidebar after the single workspace entry');
 for(const id of ['close-sidebar','sidebar-projects','nav-review','nav-settings','nav-reminders','nav-pending'])assert.ok(!find(id,nodes),'Old sidebar chrome must be removed: '+id);
 assert.ok(!nodes.some(n=>n.visible!=='false'&&n.text==='你的开发空间'));
 assert.ok(nodes.filter(n=>n.visible!=='false'&&n.id?.startsWith('sidebar-session-')&&bounds(n)[1]>=list[1]&&bounds(n)[3]<=list[3]).length>=10,'At least ten normal history titles should fit');
@@ -30,4 +30,4 @@ try{
 }finally{await menu('外观');await tap(original);await pause(700);await tap('native-back');await wait('chat-input');await pause(1800);}
 await tap('model-select');await wait('model-quick-picker');await wait('quick-model-option-fixture/fixture-coder');await pause(800);const area=bounds(find('model-quick-picker'));assert.ok(area[2]-area[0]>800&&area[3]-area[1]>500,'Model popup must render a real visible surface');await shot('history-glass-dark-model');await back();
 assert.equal((await state()).receipts.filter(r=>r.path.endsWith('/prompt')).length,before);
-console.log('PASS history-first sidebar: 84% width, 72%+ list height, ten visible rows, outside dismissal without click-through, filter/archive/search, back, moved review entry, and both glass themes; no prompt sent.');
+console.log('PASS history-first sidebar: 84% width, 66%+ list height, ten visible rows, outside dismissal without click-through, filter/archive/search, back, moved review entry, and both glass themes; no prompt sent.');
