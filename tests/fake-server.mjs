@@ -192,7 +192,7 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/session/active') return send(res, { data: Object.fromEntries([...new Set([...(active?[session.id]:[]),...controlActive])].map(id=>[id,{type:'running'}])) });
   if (path === '/api/agent') return send(res,{location:{directory},data:agents});
   if (path === '/api/model') return send(res, { location: { directory }, data: [
-    { id: 'fixture/fixture-coder', modelID: 'fixture-coder', providerID: 'fixture', name: '本机测试模型', limit:{context:128000,output:8192}, enabled: true, status: 'active' },
+    { id: 'fixture/fixture-coder', modelID: 'fixture-coder', providerID: 'fixture', name: '本机测试模型', variants:[{id:'low'},{id:'medium'},{id:'high'},{id:'max'}], limit:{context:128000,output:8192}, enabled: true, status: 'active' },
     { id: 'fixture/fixture-second', modelID: 'fixture-second', providerID: 'fixture', name: '模型切换测试', enabled: true, status: 'active' },
     ...Array.from({length:75},(_,i)=>({modelID:'model-'+String(i).padStart(3,'0'),providerID:'fixture-extra',name:'测试模型'+String(i).padStart(3,'0'),enabled:true,capabilities:{input:i%2===0?['text','image']:['text','pdf']}}))
   ] });

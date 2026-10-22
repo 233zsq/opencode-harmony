@@ -8,6 +8,9 @@ import { FormFieldsView } from './FormFieldsView';
 export struct ProviderSettings {
   @ObjectLink store: ProviderStore;
   @Prop detail: boolean = false;
+  @Prop enabledCount: number = 0;
+  @Prop favoriteCount: number = 0;
+  onManageModels: (favoritesOnly: boolean) => void = (): void => {};
   onOpenProvider: () => void = (): void => {};
   onOpenLink: (url: string) => void = (): void => {};
   @Builder
@@ -124,6 +127,24 @@ export struct ProviderSettings {
           .fontSize(14).lineHeight(23).fontColor(C.secondary).wordBreak(WordBreak.BREAK_WORD).width('100%')
         if (this.store.error) { Text(this.store.error).fontSize(14).lineHeight(23).fontColor(C.warning).width('100%') }
         if (this.store.notice) { Text(this.store.notice).fontSize(14).lineHeight(23).fontColor(C.secondary).width('100%') }
+        Row({ space: 10 }) {
+          Button({ type: ButtonType.Normal }) {
+            Row({ space: 8 }) {
+              SymbolGlyph($r('sys.symbol.star')).fontSize(16).fontColor([C.accent])
+              Text('喜爱模型').fontSize(14).fontColor(C.text)
+              Text(String(this.favoriteCount)).fontSize(12).fontColor(C.secondary)
+            }
+          }.id('manage-favorite-models').layoutWeight(1).height(46).padding({ left: 10, right: 10 }).borderRadius(14)
+            .backgroundColor(C.surface).onClick(() => { this.onManageModels(true); })
+          Button({ type: ButtonType.Normal }) {
+            Row({ space: 8 }) {
+              SymbolGlyph($r('sys.symbol.checkmark')).fontSize(16).fontColor([C.accent])
+              Text('启用模型').fontSize(14).fontColor(C.text)
+              Text(String(this.enabledCount)).fontSize(12).fontColor(C.secondary)
+            }
+          }.id('manage-enabled-models').layoutWeight(1).height(46).padding({ left: 10, right: 10 }).borderRadius(14)
+            .backgroundColor(C.surface).onClick(() => { this.onManageModels(false); })
+        }.width('100%')
         NativeSegments({ first: '提供商', second: '兼容渠道', third: '模型目录',
           selected: this.store.section === 'native' ? 0 : this.store.section === 'custom' ? 1 : 2,
           onSelect: (index: number): void => { this.store.section = index === 0 ? 'native' : index === 1 ? 'custom' : 'models'; } }).id('provider-segments')

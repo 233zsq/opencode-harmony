@@ -18,7 +18,7 @@ const httpMock = {
     destroy() {}, on() {}, requestInStream: async (url, options) => { requests.push({ url, options }); return 200; }
   })
 };
-class StorageMock { async sessionPreferences() { return []; } async saveSessionPreferences() {} async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} async activeServer() { return ''; } async rememberServer() {} }
+class StorageMock { async modelPreferences() { return {enabled:[],favorites:[],recent:[]}; } async saveModelPreferences() {} async sessionPreferences() { return []; } async saveSessionPreferences() {} async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} async activeServer() { return ''; } async rememberServer() {} }
 const modules = new Map([
   ['@kit.NetworkKit', { http: httpMock }],
   ['@kit.ArkTS', { util: { TextEncoder: Encoder, TextDecoder: Decoder, Base64Helper: Base64 } }],
@@ -40,6 +40,7 @@ function load(file, key) {
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
 modules.set('./Core', modules.get('../domain/Core'));
+load('entry/src/main/ets/domain/ModelSelection.ts', '../domain/ModelSelection');
 const connections=load('entry/src/main/ets/domain/Connections.ts', '../domain/Connections');
 const usageDomain=load('entry/src/main/ets/domain/SessionUsage.ts', '../domain/SessionUsage');
 const trust = load('entry/src/main/ets/data/DedicatedTrust.ets', './DedicatedTrust');

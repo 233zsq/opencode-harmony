@@ -1,3 +1,4 @@
+import { ModelPreferences, emptyModelPreferences, normalizeModelPreferences } from '../domain/ModelSelection';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { asset } from '@kit.AssetStoreKit';
@@ -45,7 +46,21 @@ export class Storage {
   }
   async resetServerPosition(id: string): Promise<void> {
     if (!this.prefs) { throw new Error('本机设置尚未就绪'); }
-    try { await this.prefs.put('position.' + id, '[]'); await this.prefs.put('sessionPreferences.' + id, '[]'); await this.prefs.flush(); } catch (e) { throw e as Error; }
+    try { await this.prefs.put('position.' + id, '[]'); await this.prefs.put('sessionPreferences.' + id, '[]'); await this.prefs.put('modelPreferences.' + id, JSON.stringify(emptyModelPreferences())); await this.prefs.flush(); } catch (e) { throw e as Error; }
+  }
+  async modelPreferences(serverID: string): Promise<ModelPreferences> {
+    if (!this.prefs) { throw new Error('本机设置尚未就绪'); }
+    let raw: string;
+    try { raw = await this.prefs.get('modelPreferences.' + serverID, '') as string; } catch (e) { throw e as Error; }
+    if (!raw) { return emptyModelPreferences(); }
+    try { return normalizeModelPreferences(JSON.parse(raw) as ModelPreferences); } catch (_) { return emptyModelPreferences(); }
+  }
+  async saveModelPreferences(serverID: string, value: ModelPreferences): Promise<void> {
+    if (!this.prefs) { throw new Error('本机设置尚未就绪'); }
+    const key = 'modelPreferences.' + serverID; let before: string;
+    try { before = await this.prefs.get(key, '') as string; } catch (e) { throw e as Error; }
+    try { await this.prefs.put(key, JSON.stringify(normalizeModelPreferences(value))); await this.prefs.flush(); }
+    catch (error) { try { await this.prefs.put(key, before); await this.prefs.flush(); } catch (_) {} throw error as Error; }
   }
   private query(id: string): asset.AssetMap {
     try {

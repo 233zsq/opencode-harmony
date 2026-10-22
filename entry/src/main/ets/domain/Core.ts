@@ -67,8 +67,8 @@ export interface Interaction {
 }
 export interface ServerConfig { id: string; name: string; url: string; username: string; allowHttp: boolean; useDedicatedTrust?: boolean; preferredModel?: string; }
 export interface ProjectItem { id: string; name: string; directory: string; }
-export interface SessionItem { parentID?: string; forkType?: string; forkBefore?: string; agent?: string; id: string; title: string; directory: string; status: string; model: string; updated?: number; archived?: boolean; }
-export interface ModelItem { id: string; label: string; input?: string[]; contextLimit?: number; }
+export interface SessionItem { variant?: string; parentID?: string; forkType?: string; forkBefore?: string; agent?: string; id: string; title: string; directory: string; status: string; model: string; updated?: number; archived?: boolean; }
+export interface ModelItem { variants?: string[]; available?: boolean; id: string; label: string; input?: string[]; contextLimit?: number; }
 export interface FileItem { name: string; path: string; directory: boolean; }
 export interface DiffItem { path: string; patch: string; }
 export interface TimelineEntry { id: string; type: string; text: string; created: number; outcome: string; }

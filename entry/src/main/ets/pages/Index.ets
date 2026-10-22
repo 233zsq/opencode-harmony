@@ -1,11 +1,11 @@
+import { ModelMenuHost } from '../components/ModelMenuHost';
+import { ModelLibrary } from '../components/ModelLibrary';
 import { ForkPanel } from '../components/ForkPanel';
 import { UsagePanel } from '../components/UsagePanel';
 import { AgentItem } from '../domain/Agents';
 import { AgentPicker } from '../components/AgentPicker';
 import { ExportPanel } from '../components/ExportPanel';
 import { DocumentSaver } from '../data/DocumentSaver';
-import { QuickModelPicker } from '../components/QuickModelPicker';
-import { ModelPicker } from '../components/ModelPicker';
 import { DiffContent } from '../components/DiffContent';
 import { Attachment, attachmentProblem } from '../domain/Attachments';
 import { AttachmentPicker } from '../data/AttachmentPicker';
@@ -46,6 +46,7 @@ struct Index {
   private pendingLaunch: NotificationTarget | undefined = undefined;
   @State follow: boolean = true;
   @State switchingModel: boolean = false;
+  @State modelLibraryFavorites: boolean = false;
   @State savingExport: boolean = false;
   @State exportNotice: string = '';
   private async selectAgent(id: string): Promise<void> {
@@ -68,6 +69,12 @@ struct Index {
     if (id === this.store.modelID) { this.closePanel(); return; }
     const scope = this.store.connected + '/' + this.store.sessionID; this.switchingModel = true;
     try { await this.store.chooseModel(id); if (scope === this.store.connected + '/' + this.store.sessionID && this.store.modelID === id && !this.store.error && this.panelVisible('model')) { this.closePanel(); } }
+    finally { this.switchingModel = false; }
+  }
+  private async selectVariant(variant: string): Promise<boolean> {
+    if (this.switchingModel || !this.store.sessionID) { return false; }
+    this.switchingModel = true;
+    try { return await this.store.chooseModel(this.store.modelID, variant); }
     finally { this.switchingModel = false; }
   }
   @State forkBefore: string = '';
@@ -231,7 +238,7 @@ struct Index {
   }
   private openSheet(kind: string): void {
     this.dismissKeyboard(); this.closePopups(); this.sheetKind = kind;
-    if (['model', 'agent', 'usage', 'fork', 'export', 'tool'].indexOf(kind) >= 0) {
+    if (['agent', 'usage', 'fork', 'export', 'tool'].indexOf(kind) >= 0) {
       this.panelReturn = this.store.pane === 'more' ? 'more' : 'chat';
       this.panelScope = this.store.connected + '/' + this.store.sessionID;
       this.toolSheetOpen = false; this.store.pane = 'panel-' + kind;
@@ -242,7 +249,7 @@ struct Index {
     if (context) { Appearance.save(context as common.Context, mode).catch(() => { this.store.error = '外观设置未保存，请稍后重试。'; }); }
   }
   private pageTitle(name: string): string {
-    if (name === 'panel-model') { return '选择模型'; }
+    if (name === 'model-library') { return this.modelLibraryFavorites ? '喜爱模型' : '启用模型'; }
     if (name === 'panel-agent') { return '选择 Agent'; }
     if (name === 'panel-usage') { return '上下文与用量'; }
     if (name === 'panel-fork') { return this.forkEditing ? '编辑并分叉' : '创建会话分支'; }
@@ -610,6 +617,7 @@ struct Index {
     if (this.pickingAttachments) { return '正在读取附件…'; }
     if (this.store.pendingSend) { return '发送结果待核对 · 点击同步'; }
     if (this.store.interrupting) { return '正在停止…'; }
+    if (this.store.modelUncertain) { return '模型设置待确认 · 点击核对'; }
     if (this.store.agentUncertain) { return 'Agent 待确认'; }
     if (this.store.interactions.length) { return '有 ' + this.store.interactions.length + ' 项待处理 · 点击查看'; }
     if (this.store.working) { return '正在生成…'; }
@@ -622,7 +630,7 @@ struct Index {
       .textOverflow({ overflow: TextOverflow.Ellipsis }).width('88%').height(10).textAlign(TextAlign.Center)
       .position({ x: '50%', y: '100%' }).translate({ x: '-50%', y: -10 })
       .accessibilityText(this.chatStatus()).onClick(() => {
-        if (this.store.pendingSend && !this.store.busy) { this.store.sync(); }
+        if ((this.store.pendingSend || this.store.modelUncertain) && !this.store.busy) { this.store.sync(); }
         else if (this.store.interactions.length) { this.navigate('pending'); }
         else if (this.quietNotice) { this.quietNotice = ''; }
       })
@@ -745,7 +753,7 @@ struct Index {
               }
             }.id('send-button').accessibilityText(this.store.pendingSend ? '重试发送' : '发送消息').width(40).padding(0).height(40).margin({ bottom: 1 })
               .backgroundColor(this.store.draft.trim() || this.store.attachments.length || this.store.pendingSend ? C.btn : C.field)
-              .enabled(!this.store.busy && !this.store.agentBusy && !this.store.agentUncertain && !this.store.forkBusy && !this.store.compactionBusy && ['submitting', 'queued', 'running'].indexOf(this.store.compaction.state) < 0 && !this.pickingAttachments && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.attachments.length || !!this.store.pendingSend))
+              .enabled(!this.store.busy && !this.store.modelBusy && !this.store.modelUncertain && !this.store.agentBusy && !this.store.agentUncertain && !this.store.forkBusy && !this.store.compactionBusy && ['submitting', 'queued', 'running'].indexOf(this.store.compaction.state) < 0 && !this.pickingAttachments && !!this.store.sessionID && (!!this.store.draft.trim() || !!this.store.attachments.length || !!this.store.pendingSend))
               .onClick(() => { this.follow = true; this.store.send(); })
           }
         }.id('composer-field').alignItems(VerticalAlign.Bottom).padding({ left: 5, right: 7, top: 6, bottom: 6 }).width('100%')
@@ -974,7 +982,6 @@ struct Index {
       contextLimit: this.store.models.find((model: ModelItem) => model.id === this.store.modelID)?.contextLimit ?? -1, loading: this.store.usageLoading, busy: this.store.compactionBusy, compact: this.store.compaction, error: this.store.usageError,
       blocked: this.store.working || !!this.store.pendingSend || !!this.store.interactions.length || !!this.store.permissionError || this.store.forkBusy || this.store.agentBusy, onRefresh: (): void => { this.store.refreshUsage(); }, onCompact: (): void => { this.confirmCompaction(); } }) }
     else if (kind === 'export') { ExportPanel({ busy: this.store.exporting, saving: this.savingExport, count: this.store.exportCount, error: this.store.exportError, notice: this.exportNotice, onExport: (format: string, tools: boolean): void => { this.exportConversation(format, tools); }, onCancel: (): void => { this.store.cancelExport(); } }) }
-    else if (kind === 'model') { ModelPicker({ models: this.store.models, current: this.store.modelID, busy: this.switchingModel, error: this.store.error, onSelect: (id: string): void => { this.selectModel(id); }, onManage: (): void => { this.toolSheetOpen = false; this.navigate('settings'); } }) }
     else if (kind === 'attachment') { AttachmentPreview({ item: this.selectedAttachment, saving: this.savingAttachment, onSave: (item: Attachment): void => { this.saveAttachment(item); }, onCopy: (text: string): void => { this.copy(text); } }) }
     else if (kind === 'session') { this.sessionActions() }
     else { this.moreFunctions() }
@@ -1222,14 +1229,6 @@ struct Index {
     }.id('tool-details').padding({ left: 16, right: 16, top: 8, bottom: 18 }).width('100%').height('100%')
   }
   @Builder
-  quickModelPopup() {
-    QuickModelPicker({ models: this.store.models, current: this.store.modelID, busy: this.switchingModel, error: this.store.error,
-      listHeight: Math.max(128, Math.min(280, this.viewportHeight * 0.56 - 116)),
-      onSelect: (id: string): void => { this.selectModel(id); },
-      onAll: (): void => { this.closePopups(); this.openSheet('model'); },
-      onManage: (): void => { this.navigate('settings'); } })
-  }
-  @Builder
   workspacePopup() {
     Column({ space: 0 }) {
       Text('工作空间').fontSize(15).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%').padding({ left: 14, top: 14, bottom: 8 })
@@ -1257,16 +1256,15 @@ struct Index {
   }
   private surfacePopupOptions(kind: string): CustomPopupOptions {
     const isWorkspace: boolean = kind === 'workspace';
-    const isAttachment: boolean = kind === 'attachment';
     const options: CustomPopupOptions = {
-      builder: (): void => { if (isWorkspace) { this.workspacePopup(); } else if (isAttachment) { this.attachmentPopup(); } else { this.quickModelPopup(); } },
-      placement: isWorkspace || isAttachment ? Placement.TopLeft : Placement.BottomLeft, enableArrow: false,
-      width: Math.min(300, this.viewportWidth - 40), targetSpace: 8, offset: { x: isWorkspace || isAttachment ? 0 : -40, y: 0 }, radius: 24,
+      builder: (): void => { if (isWorkspace) { this.workspacePopup(); } else { this.attachmentPopup(); } },
+      placement: Placement.TopLeft, enableArrow: false,
+      width: Math.min(300, this.viewportWidth - 40), targetSpace: 8, offset: { x: 0, y: 0 }, radius: 24,
       popupColor: C.glass_strong, backgroundBlurStyle: BlurStyle.COMPONENT_THICK, shadow: ShadowStyle.OUTER_DEFAULT_MD,
       mask: { color: '#0A000000' }, autoCancel: true, focusable: false,
-      onWillDismiss: (action): void => { action.dismiss(); if (isWorkspace) { this.workspacePopupOpen = false; } else if (isAttachment) { this.attachmentPopupOpen = false; } else { this.modelPopupOpen = false; } },
+      onWillDismiss: (action): void => { action.dismiss(); if (isWorkspace) { this.workspacePopupOpen = false; } else { this.attachmentPopupOpen = false; } },
       transition: TransitionEffect.OPACITY.animation({ duration: 160, curve: Curve.EaseOut }),
-      onStateChange: (event): void => { if (!event.isVisible) { if (isWorkspace) { this.workspacePopupOpen = false; } else if (isAttachment) { this.attachmentPopupOpen = false; } else { this.modelPopupOpen = false; } } } };
+      onStateChange: (event): void => { if (!event.isVisible) { if (isWorkspace) { this.workspacePopupOpen = false; } else { this.attachmentPopupOpen = false; } } } };
     if (deviceInfo.sdkApiVersion >= 26) {
       if (deviceInfo.apiAvailable('26.0.0')) { if (this.modelMaterial) { options.systemMaterial = this.modelMaterial; options.focusable = true; } }
     }
@@ -1296,16 +1294,7 @@ struct Index {
     Row({ space: 8 }) {
       Blank().width(this.sidebarOpen ? 0 : 52).height(40)
       if (this.store.models.length) {
-        Button(this.modelLabel(), { type: ButtonType.Normal }).id('model-select')
-          .fontSize(15).fontWeight(FontWeight.Medium).fontColor(C.text).height(36)
-          .labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
-          .backgroundColor(Color.Transparent).backgroundEffect({ radius: 20, saturation: 1.1, color: C.glass_fill }).border({ width: 0.5, color: C.glass_stroke }).borderRadius(999)
-          .padding({ left: 13, right: 13 })
-          .constraintSize({ maxWidth: 220 })
-          .width(Math.min(220, Math.max(96, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))))
-          .enabled(!!this.store.sessionID && !this.store.busy).accessibilityText('选择对话模型')
-          .onClick(() => { this.dismissKeyboard(); this.store.error = ''; this.workspacePopupOpen = false; this.attachmentPopupOpen = false; this.modelPopupOpen = !this.modelPopupOpen; })
-          .bindPopup(this.modelPopupOpen, this.surfacePopupOptions('model'))
+        Blank().width(Math.min(220, Math.max(96, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224)))).height(36)
       } else { Text('OpenCode').fontSize(15).fontWeight(FontWeight.Bold).fontColor(C.text).layoutWeight(1) }
       Blank().layoutWeight(1)
     }.width(Math.max(180, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - 104)).height(56)
@@ -1340,12 +1329,21 @@ struct Index {
         else if (name === 'appearance') { this.appearanceSettings() }
         else if (name === 'reminders') { this.reminderSettings() }
         else if (name === 'provider-auth') { ProviderSettings({ store: this.store.providers, detail: true, onOpenLink: (url: string): void => { this.openLink(url); } }) }
-        else if (name === 'settings') { ProviderSettings({ store: this.store.providers, onOpenProvider: (): void => { this.navigate('provider-auth'); }, onOpenLink: (url: string): void => { this.openLink(url); } }) }
+        else if (name === 'model-library') { ModelLibrary({ models: this.store.models, preferences: this.store.modelPreferences,
+          favoritesOnly: this.modelLibraryFavorites, busy: this.store.modelPreferencesBusy || this.store.modelBusy,
+          error: this.store.modelPreferencesError,
+          onManageAll: (): void => { this.modelLibraryFavorites = false; },
+          onEnable: (id: string, enabled: boolean): void => { this.store.enableModel(id, enabled); },
+          onFavorite: (id: string, favorite: boolean): void => { this.store.favoriteModel(id, favorite); },
+          onRefresh: (): void => { this.store.refreshModels().catch((): void => { this.store.modelPreferencesError = '未能刷新模型目录，请重试'; }); } }) }
+        else if (name === 'settings') { ProviderSettings({ store: this.store.providers, enabledCount: this.store.modelPreferences.enabled.length,
+          favoriteCount: this.store.modelPreferences.favorites.length,
+          onManageModels: (favoritesOnly: boolean): void => { this.modelLibraryFavorites = favoritesOnly; this.navigate('model-library'); }, onOpenProvider: (): void => { this.navigate('provider-auth'); }, onOpenLink: (url: string): void => { this.openLink(url); } }) }
         else { this.review() }
       }.height('100%').width('100%').backgroundColor(C.page)
     }.id('native-destination').title(this.pageTitle(name))
       .systemBarStyle({ statusBarContentColor: this.darkAppearance ? '#EDEEF0' : '#15171C' })
-      .backgroundColor(C.page).onBackPressed((): boolean => { if (name.startsWith('panel-')) { this.closePanel(); } else { this.store.pane = name === 'provider-auth' ? 'settings' : 'chat'; } return true; })
+      .backgroundColor(C.page).onBackPressed((): boolean => { if (name.startsWith('panel-')) { this.closePanel(); } else { this.store.pane = name === 'provider-auth' || name === 'model-library' ? 'settings' : 'chat'; } return true; })
   }
   build() {
     SideBarContainer(this.wide ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
@@ -1361,6 +1359,20 @@ struct Index {
         .navDestination(this.destination).mode(NavigationMode.Stack).hideBackButton(true)
         .onNavBarStateChange((visible: boolean) => { if (visible && !this.navigation.getAllPathName().length && this.store.pane !== 'chat') { this.store.pane = 'chat'; } })
         .backgroundColor(C.page).height('100%').width('100%')
+        // Navigation custom titles recreate their subtree during polling; retain this anchor in the page.
+        if (this.store.pane === 'chat' && this.store.models.length && (!this.sidebarOpen || this.wide)) {
+          Row() {
+            ModelMenuHost({ open: $modelPopupOpen, label: this.modelLabel(), current: this.store.modelID, variant: this.store.modelVariant,
+              models: this.store.models, preferences: this.store.modelPreferences, error: this.store.error,
+              uncertain: this.store.modelUncertain, busy: this.switchingModel || this.store.modelBusy || this.store.modelPreferencesBusy,
+              canOpen: !!this.store.sessionID && !this.store.busy,
+              triggerWidth: Math.min(220, Math.max(96, this.viewportWidth - (this.wide && this.sidebarOpen ? 280 : 0) - (this.sidebarOpen ? 168 : 224))),
+              popupWidth: Math.min(272, this.viewportWidth - 40), popupHeight: Math.max(240, Math.min(600, this.viewportHeight - 160)),
+              onOpen: (): void => { this.dismissKeyboard(); this.store.error = ''; this.workspacePopupOpen = false; this.attachmentPopupOpen = false; },
+              onSelect: (id: string): void => { this.selectModel(id); }, onVariant: (id: string): Promise<boolean> => this.selectVariant(id),
+              onRefresh: (): void => { this.store.sync(); }, onManage: (): void => { this.navigate('settings'); } })
+          }.id('model-anchor-layer').height(36).position({ x: this.sidebarOpen ? 16 : 60, y: 10 })
+        }
         if (this.sidebarOpen && !this.wide) {
           Column().id('sidebar-dismiss').width(Math.max(44, this.viewportWidth - this.sidebarWidth())).height('100%')
             .position({ x: this.sidebarWidth(), y: 0 }).backgroundColor('#14000000')

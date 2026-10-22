@@ -1,5 +1,7 @@
 # 历史侧栏与系统光感（2026-10-21）
 
+> 2026-10-22：当前模型浮层与验收入口以 [MODEL-PREFERENCES.md](MODEL-PREFERENCES.md) 为准；下文保留当时实现和验收记录。
+
 接续 [比例调整](HARMONY-UI-REFINEMENT.md)，本轮按使用者的新反馈，让侧栏集中展示历史；字号与聊天布局沿用上一轮。
 
 ## 历史优先
@@ -39,7 +41,7 @@ API26 原生验收通过：侧栏约 84% 宽度、至少 72% 的可用高度用�
 $env:OPENCODE_FIXTURE_PORT='55268'
 node tests/material-focus-ui.mjs
 node tests/history-sidebar-ui.mjs
-node tests/model-popup-ui.mjs
+node tests/model-controls-ui.mjs
 node tests/luminous-ui.mjs
 ```
 

@@ -1,5 +1,7 @@
 # 鸿蒙原生比例与模型浮层（2026-10-21，第二轮）
 
+> 2026-10-22：当前模型浮层与验收入口以 [MODEL-PREFERENCES.md](MODEL-PREFERENCES.md) 为准；下文保留当时实现和验收记录。
+
 本轮接续 [此前的界面调整](LUMINOUS-UI.md)，按使用者的新截图收敛过大的侧栏、字号与卡片比例，并把模型高频选择恢复为顶部轻量浮层。
 
 ## 参考依据与实现选择
@@ -54,8 +56,7 @@
 
 ```powershell
 $env:OPENCODE_FIXTURE_PORT='55267'
-node tests/model-popup-ui.mjs
-node tests/model-picker-ui.mjs
+node tests/model-controls-ui.mjs
 node tests/luminous-ui.mjs
 ```
 

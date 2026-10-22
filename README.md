@@ -7,7 +7,7 @@
 ## 当前实现
 
 - 对话首页、原生导航与系统菜单、手机抽屉与Pad宽屏侧栏；历史搜索、独立管理页面及最近服务器恢复。
-- 鸿蒙原生视觉与比例：中性灰白/深灰主题、蓝色选中态、较窄历史侧栏、分层字号与分组列表；原创玻璃代码图标用于启动和空态。模型高频选择采用顶部锚定浮层，“全部模型”进入完整搜索页，其余复杂流程使用原生页面；见 [HARMONY-UI-REFINEMENT.md](docs/HARMONY-UI-REFINEMENT.md)。
+- 鸿蒙原生视觉与比例：中性灰白/深灰主题、蓝色选中态、较窄历史侧栏、分层字号与分组列表；原创玻璃代码图标用于启动和空态。模型高频选择采用顶部锚定浮层，“全部模型”和思考程度在浮层内展开，其余复杂流程使用原生页面；见 [HARMONY-UI-REFINEMENT.md](docs/HARMONY-UI-REFINEMENT.md)。
 - API26 原生沉浸光感、系统分段控件及跟随系统/浅色/深色外观；最低兼容 API24。
 - 多服务器配置与编辑、密码保留/更新/清除、重复地址检查及移除确认；HTTP Basic 认证、连接与错误状态。
 - 项目/目录、创建和恢复会话、历史分页；会话改名、本机置顶/归档及服务器名称搜索。
@@ -18,7 +18,7 @@
 - 会话 Agent 搜索与切换、说明及默认模型展示；切换结果读回确认与重复提交保护。
 - 消息分叉、编辑重发草稿、可选原附件与父会话返回；上下文上限、服务端 Token/费用及手动压缩状态核对。
 - 完整历史导出 Markdown/文本、可选工具详情与原生文件保存；长会话进度、取消及失败处理。
-- 动态模型目录、聊天页模型搜索与分批选择、渠道/ID和图片/PDF能力展示，以及每个服务器的模型偏好。
+- 动态模型目录；每台服务器独立管理启用与喜爱模型，最近两个非喜爱模型固定显示在选择栏底部；浮层内搜索、分批选择及服务器声明的思考档位。详见 [MODEL-PREFERENCES.md](docs/MODEL-PREFERENCES.md)。
 - 手机端提供商搜索、API Key、OAuth 设备码/授权码和多账号管理；受限自定义兼容渠道。
 - 只读文件浏览、工作区 Git Diff，以及按任务快照查看会话修改。
 - 退避重连、回前台同步、消息 ID 去重与迟到响应隔离；发送结果核对、草稿及 Question 答案在本次运行中暂存。
@@ -26,7 +26,7 @@
 - 任务提醒：完成/失败/待回答与待审批可分别开关，仅在用户主动开启时申请系统通知权限；通知只显示通用状态，点击回到对应会话并保留草稿；当前正在查看的会话只用安静应用内提示。前台、短时间后台与进程退出边界见 [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)。
 - 手机输入与适配：真实软键盘避让、中文候选栏与多行输入、切换会话/打开面板时收起键盘并保留草稿、系统大字体（跟随系统，上限 1.75）、窄屏省略与图标按钮无障碍热区；边界见 [MOBILE-USABILITY.md](docs/MOBILE-USABILITY.md)，通知审查与修复见 [MOBILE-REVIEW.md](docs/MOBILE-REVIEW.md)。
 
-已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 273 项 Node 回归、2 项 Python 域校验、4 项 Node 合成负载检查及完整构建；本轮交互与提醒在 API26 模拟器验收，真机、横屏/分屏和 API24 设备留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 289 项 Node 回归、2 项 Python 域校验及完整构建；模型启用/喜爱/历史、思考档位和浅深色浮层在 API26 模拟器使用本机测试服务验收。本轮真机、横屏/分屏和 API24 设备留待之后，既有 4 项 Node 合成负载结果不等同于设备性能。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
 独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 

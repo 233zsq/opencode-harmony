@@ -1,5 +1,7 @@
 # 悬浮对话界面
 
+> 2026-10-22：当前模型浮层与验收入口以 [MODEL-PREFERENCES.md](MODEL-PREFERENCES.md) 为准；下文保留当时实现和验收记录。
+
 本轮保留会话标题，将它与右侧 Agent 按钮做成独立的毛玻璃胶囊。标题保持单行省略，长名称可收缩，避免挤出 Agent。正文列表覆盖整个聊天区域，标题、输入栏及“回到最新”叠放在列表上方；不再分配一条实色工具栏。
 
 输入栏保留原有底部间距，任务状态以 9fp 小字放在下沿，不占新的布局行。正在读取附件、生成、停止、发送待核对、待处理和连接状态按优先级显示；发送结果待核对时仍可点击同步，待处理入口仍能打开审批与问题。附件缩略图和多行草稿可扩展，停止/发送与加号均为 40vp，保持底部对齐。
@@ -17,7 +19,7 @@
 ```powershell
 $env:OPENCODE_FIXTURE_PORT='55269'
 node tests/floating-chat-ui.mjs
-node tests/model-popup-ui.mjs
+node tests/model-controls-ui.mjs
 node tests/history-sidebar-ui.mjs
 node tests/chat-layout.mjs
 ```

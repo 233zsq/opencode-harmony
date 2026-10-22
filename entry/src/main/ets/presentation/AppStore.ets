@@ -1,3 +1,4 @@
+import { ModelPreferences, emptyModelPreferences, enabledModels, setModelEnabled, setModelFavorite, rememberModel } from '../domain/ModelSelection';
 import { prepareConnection, sameConnectionIdentity, ConnectionInput } from '../domain/Connections';
 import { SessionUsage, emptyUsage, CompactRecord } from '../domain/SessionUsage';
 import { AgentItem } from '../domain/Agents';
@@ -16,7 +17,7 @@ import { TaskNotification, TaskNotifySink, NoopTaskNotifier, NotificationLedger,
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
 interface PromptRequest { id: string; text: string; delivery: string; resume: boolean; files?: PromptFile[]; }
-interface ModelRef { id: string; providerID: string; }
+interface ModelRef { id: string; providerID: string; variant?: string; }
 interface ModelRequest { model: ModelRef; }
 interface HistoryResponse { data: Object[]; }
 interface AgentRequest { agent: string; }
@@ -61,6 +62,13 @@ export class AppStore {
   sessionTitle: string = '';
   models: ModelItem[] = [];
   modelID: string = '';
+  modelVariant: string = '';
+  modelBusy: boolean = false;
+  modelUncertain: boolean = false;
+  modelPreferences: ModelPreferences = emptyModelPreferences();
+  modelPreferencesBusy: boolean = false;
+  modelPreferencesError: string = '';
+  private modelPreferenceEpoch: number = 0;
   agents: AgentItem[] = [];
   agentID: string = '';
   agentError: string = '';
@@ -614,6 +622,7 @@ export class AppStore {
     Array.from(this.unknownForks).forEach((key: string) => { if (key.startsWith(server + '\n')) { this.unknownForks.delete(key); } });
   }
   private resetSessionControl(): void {
+    this.modelBusy = false; this.modelUncertain = false;
     this.usageEpoch++; this.parentSessionID = ''; this.branchBoundary = ''; this.usage = emptyUsage(); this.usageError = ''; this.usageLoading = false;
     this.forkBusy = false; this.forkError = ''; this.forkUncertain = this.unknownForks.has(this.controlKey()); this.compactionBusy = false;
     this.compaction = this.compactRecords.get(this.controlKey()) || { id: '', state: '', error: '' };
@@ -625,7 +634,7 @@ export class AppStore {
     this.sessionMutationBusy = false; this.sessionPreferenceBusy = false; this.runningSessions = []; this.runningUnknown = false; this.showArchived = false;
     this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(undefined, '', async (): Promise<void> => {});
-    this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接';
+    this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接'; this.modelVariant = ''; this.modelPreferenceEpoch++; this.modelPreferences = emptyModelPreferences(); this.modelPreferencesBusy = false; this.modelPreferencesError = '';
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
     this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false; this.interrupting = false;
@@ -646,8 +655,9 @@ export class AppStore {
       if (!version.startsWith('2.')) { throw new ApiError(0, '此版本仅支持 OpenCode V2。服务器版本：' + (version || '未知')); }
       const projects = await api.projects();
       const flags = await this.storage.sessionPreferences(config.id);
+      const modelPreferences = await this.storage.modelPreferences(config.id);
       if (generation !== this.generation) { return; }
-      this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects; this.sessionPreferences = flags;
+      this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects; this.sessionPreferences = flags; this.modelPreferences = modelPreferences;
       this.pendingBaseline = true; this.syncSuppressNotify = false; this.pendingSuppressNotify = false; this.taskIdlePending = false;
       this.storage.rememberServer(config.id).catch((e: Error) => this.fail(e));
       this.status = '已连接'; this.pane = 'chat'; this.attempts = 0; this.openStream();
@@ -772,7 +782,7 @@ export class AppStore {
     this.clearTimeline(); this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
     this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(api, directory.trim(), async (): Promise<void> => { await this.refreshModels(); });
-    this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.directory = directory.trim(); this.sessionID = ''; this.resetSessionControl(); this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
+    this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.directory = directory.trim(); this.sessionID = ''; this.modelID = ''; this.modelVariant = ''; this.resetSessionControl(); this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
     this.fileContent = ''; this.filePath = ''; this.files = []; this.fileTruncated = false; this.cursor = ''; this.tailLoaded = false; this.readingHistory = false; this.newerAvailable = false; this.transcriptEpoch++; this.error = ''; this.busy = true; this.syncing = false;
     try {
       await api.request('/api/location?' + api.scope(this.directory));
@@ -811,7 +821,7 @@ export class AppStore {
     this.cancelExport(); this.agentEpoch++; this.agentID = session.agent || ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
-    this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model; this.resetSessionControl(); this.parentSessionID = session.parentID || ''; this.branchBoundary = session.forkType === 'before' ? '所选消息之前' : session.forkType === 'through' ? '创建分叉时的最后一条消息' : '';
+    this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model; this.modelVariant = session.variant || ''; this.resetSessionControl(); this.parentSessionID = session.parentID || ''; this.branchBoundary = session.forkType === 'before' ? '所选消息之前' : session.forkType === 'through' ? '创建分叉时的最后一条消息' : '';
     // Existing history and pending items are seeded on the first sync; they are
     // never announced as new while the user is opening the conversation.
     this.notifyBaseline = true; this.taskIdlePending = false;
@@ -865,7 +875,7 @@ export class AppStore {
         const title = string(detail['title'], this.sessionTitle);
         if (title !== this.sessionTitle) {
           this.sessionTitle = title;
-          this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model, agent: item.agent, parentID: item.parentID, forkType: item.forkType, forkBefore: item.forkBefore, updated: item.updated, archived: item.archived }));
+          this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model, variant: item.variant, agent: item.agent, parentID: item.parentID, forkType: item.forkType, forkBefore: item.forkBefore, updated: item.updated, archived: item.archived }));
         }
         const wasWorking = this.working; const wasListedRunning = this.runningSessions.indexOf(id) >= 0;
         if (active[id] !== undefined || inbox.length > 0) { this.working = true; }
@@ -873,6 +883,11 @@ export class AppStore {
         const model = object(detail['model']);
         if (selection === this.selectionEpoch) {
           this.agentID = string(detail['agent']);
+          this.modelVariant = string(model['variant']);
+          if (model['id']) {
+            if (this.modelUncertain && this.error === '模型设置结果待核对，请同步后再继续') { this.error = ''; }
+            this.modelUncertain = false;
+          }
           if (model['id']) { this.modelID = string(model['providerID']) + '/' + string(model['id']); }
           else { this.modelID = this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; }
         }
@@ -955,7 +970,7 @@ export class AppStore {
     } catch (_) { return { id: item.id, name: item.name, mime: item.mime, size: item.size, data: '', error: '读取失败，请关闭后重试' }; }
   }
   async send(): Promise<void> {
-    if (!this.api || !this.sessionID || this.busy || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy || ['queued', 'running', 'submitting'].indexOf(this.compaction.state) >= 0 || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
+    if (!this.api || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy || ['queued', 'running', 'submitting'].indexOf(this.compaction.state) >= 0 || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
     const pending: PendingPrompt = this.pendingSend || {
       id: 'msg_' + Date.now().toString(36) + Math.random().toString(36).slice(2),
       sessionID: this.sessionID, text: this.draft.trim(), files: this.attachments.map((a: Attachment): Attachment => ({ id: a.id, name: a.name, mime: a.mime, data: a.data, size: a.size }))
@@ -1101,7 +1116,7 @@ export class AppStore {
   private async readAgentState(api: Protocol, id: string, generation: number): Promise<void> {
     const session = await api.session(id);
     if (generation !== this.generation || id !== this.sessionID) { return; }
-    this.selectionEpoch++; this.agentID = session.agent || ''; this.modelID = session.model || this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; this.agentUncertain = false;
+    this.selectionEpoch++; this.modelVariant = session.variant || ''; this.agentID = session.agent || ''; this.modelID = session.model || this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; this.agentUncertain = false;
   }
   async refreshAgentState(): Promise<void> {
     if (!this.api || this.agentBusy || this.agentLoading) { return; } const api = this.api; const id = this.sessionID; const generation = this.generation;
@@ -1113,7 +1128,7 @@ export class AppStore {
     finally { if (generation === this.generation) { this.agentLoading = false; } }
   }
   async chooseAgent(id: string): Promise<boolean> {
-    if (!this.api || !this.sessionID || this.busy || this.agentBusy || this.agentLoading || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
+    if (!this.api || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentLoading || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
     if (id === this.agentID) { return true; }
     if (!this.agents.some((a: AgentItem) => a.id === id)) { this.agentError = '请从当前服务器的可用 Agent 中选择'; return false; }
     if (this.working || this.pendingSend || this.interactions.length || this.permissionError) { this.agentError = '请先结束当前任务并处理问题或审批，再切换 Agent'; return false; }
@@ -1155,23 +1170,67 @@ export class AppStore {
       return undefined;
     } finally { if (generation === this.generation && epoch === this.exportEpoch) { this.exporting = false; this.exportJob = undefined; } }
   }
-  async chooseModel(id: string): Promise<void> {
-    if (!this.api || !this.sessionID || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy) { return; }
-    const slash = id.indexOf('/'); const generation = this.generation; this.selectionEpoch++; this.error = '';
+  private async persistModelPreferences(next: ModelPreferences): Promise<boolean> {
+    if (!this.connected || this.modelPreferencesBusy) { return false; }
+    const server = this.connected; const epoch = ++this.modelPreferenceEpoch;
+    this.modelPreferencesBusy = true; this.modelPreferencesError = '';
     try {
-      await this.api.request(this.sessionPath() + '/model', http.RequestMethod.POST,
-        { model: { id: id.slice(slash + 1), providerID: id.slice(0, slash) } } as ModelRequest);
-      if (generation === this.generation) {
-        this.selectionEpoch++; this.modelID = id;
-        if (this.connected) {
-          this.servers = this.servers.map((s: ServerConfig): ServerConfig => ({ id: s.id, name: s.name, url: s.url,
-            username: s.username, allowHttp: s.allowHttp, useDedicatedTrust: s.useDedicatedTrust,
-            preferredModel: s.id === this.connected ? id : s.preferredModel }));
-          await this.storage.saveServers(this.servers);
-        }
-        await this.sync();
+      await this.storage.saveModelPreferences(server, next);
+      if (server !== this.connected || epoch !== this.modelPreferenceEpoch) { return false; }
+      this.modelPreferences = next; return true;
+    } catch (_) { if (server === this.connected && epoch === this.modelPreferenceEpoch) { this.modelPreferencesError = '模型偏好未保存，请重试'; } return false; }
+    finally { if (server === this.connected && epoch === this.modelPreferenceEpoch) { this.modelPreferencesBusy = false; } }
+  }
+  async enableModel(id: string, enabled: boolean): Promise<boolean> {
+    if (this.modelBusy || this.modelPreferencesBusy) { return false; }
+    if ((this.modelPreferences.enabled.indexOf(id) >= 0) === enabled) { return true; }
+    if (enabled && !this.models.some((model: ModelItem) => model.id === id && model.available !== false)) { return false; }
+    return this.persistModelPreferences(setModelEnabled(this.modelPreferences, id, enabled));
+  }
+  async favoriteModel(id: string, favorite: boolean): Promise<boolean> {
+    if (this.modelBusy || this.modelPreferencesBusy) { return false; }
+    if ((this.modelPreferences.favorites.indexOf(id) >= 0) === favorite) { return true; }
+    if (favorite && !this.models.some((model: ModelItem) => model.id === id && model.available !== false)) { return false; }
+    return this.persistModelPreferences(setModelFavorite(this.modelPreferences, id, favorite));
+  }
+  async chooseModel(id: string, variant: string = ''): Promise<boolean> {
+    if (!this.api || !this.sessionID || this.modelBusy || this.modelPreferencesBusy || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
+    if (this.modelUncertain) { this.error = '模型设置结果待核对，请先同步再选择'; return false; }
+    if (this.pendingSend) { this.error = '请先核对上一次发送结果，再切换模型或思考程度'; return false; }
+    const model = enabledModels(this.models, this.modelPreferences).find((item: ModelItem) => item.id === id);
+    if (!model) { this.error = '请先在模型与接入中启用这个模型'; return false; }
+    if (variant && (model.variants || []).indexOf(variant) < 0) { this.error = '服务器没有提供这个思考档位，请刷新模型目录'; return false; }
+    if (id === this.modelID && variant === this.modelVariant) { return true; }
+    const slash = id.indexOf('/'); const generation = this.generation; const api = this.api;
+    this.selectionEpoch++; this.error = ''; this.modelBusy = true; let submitted = false;
+    try {
+      const reference: ModelRef = { id: id.slice(slash + 1), providerID: id.slice(0, slash) };
+      if (variant) { reference.variant = variant; }
+      submitted = true;
+      await api.request(this.sessionPath() + '/model', http.RequestMethod.POST, { model: reference } as ModelRequest);
+      if (generation !== this.generation) { return false; }
+      const detail = object(object(await api.request(this.sessionPath()))['data']); const confirmed = object(detail['model']);
+      if (generation !== this.generation) { return false; }
+      if (!confirmed['id']) { throw new Error('模型设置结果待核对，请同步后重试'); }
+      this.selectionEpoch++; this.modelID = string(confirmed['providerID']) + '/' + string(confirmed['id']); this.modelVariant = string(confirmed['variant']); this.modelUncertain = false;
+      if (this.modelID !== id || this.modelVariant !== variant) { this.error = '服务器未确认所选模型或思考程度，请同步后重试'; return false; }
+      if (this.connected) {
+        this.servers = this.servers.map((s: ServerConfig): ServerConfig => ({ id: s.id, name: s.name, url: s.url,
+          username: s.username, allowHttp: s.allowHttp, useDedicatedTrust: s.useDedicatedTrust,
+          preferredModel: s.id === this.connected ? id : s.preferredModel }));
+        await this.storage.saveServers(this.servers);
       }
-    } catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
+      if (generation !== this.generation) { return false; }
+      await this.sync();
+      if (generation !== this.generation || this.error) { return false; }
+      if (this.modelID !== id || this.modelVariant !== variant) { this.error = '服务器未确认所选模型或思考程度，请同步后重试'; return false; }
+      await this.persistModelPreferences(rememberModel(this.modelPreferences, id));
+      return generation === this.generation;
+    } catch (e) { if (generation === this.generation) {
+      this.modelUncertain = submitted && !(e instanceof ApiError && [400, 401, 403, 404, 405, 422, 495].indexOf(e.code) >= 0);
+      this.fail(e as Error); if (this.modelUncertain) { this.error = '模型设置结果待核对，请同步后再继续'; }
+    } return false; }
+    finally { if (generation === this.generation) { this.modelBusy = false; } }
   }
   async openSettings(): Promise<void> { this.pane = 'settings'; await this.providers.load(); }
   async refreshModels(): Promise<void> {

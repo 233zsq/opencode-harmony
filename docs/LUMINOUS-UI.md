@@ -1,5 +1,7 @@
 # 界面层级与阅读体验更新（2026-10-21）
 
+> 2026-10-22：当前模型浮层与验收入口以 [MODEL-PREFERENCES.md](MODEL-PREFERENCES.md) 为准；下文保留当时实现和验收记录。
+
 本轮针对手机截图中的三个问题：字号偏小、所有选择器堆在底部、管理功能缺少层次。使用原生 ArkTS / ArkUI 在 `feat/luminous-ui` 实现，没有新增业务依赖。
 
 ## 页面安排
@@ -52,7 +54,7 @@ Navigation / NavDestination 继续提供系统标题与返回按钮。替换目�
 
 ```powershell
 $env:OPENCODE_FIXTURE_PORT='55261'
-node tests/model-picker-ui.mjs
+node tests/model-controls-ui.mjs
 node tests/provider-ui.mjs
 # 从认证页返回当前对话后：
 node tests/luminous-ui.mjs
