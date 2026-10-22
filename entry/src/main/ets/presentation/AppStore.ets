@@ -1351,8 +1351,3 @@ export class AppStore {
     } catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
   }
 }
-
-
-
-
-

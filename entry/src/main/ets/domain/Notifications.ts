@@ -238,4 +238,3 @@ export function parseNotificationLaunch(value: string): NotificationTarget | und
   try { return notificationTargetFromParameters(JSON.parse(value) as Record<string, Object>); }
   catch (_) { return undefined; }
 }
-

@@ -28,7 +28,7 @@
 
 已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 289 项 Node 回归、2 项 Python 域校验及完整构建；模型启用/喜爱/历史、思考档位和浅深色浮层在 API26 模拟器使用本机测试服务验收。本轮真机、横屏/分屏和 API24 设备留待之后，既有 4 项 Node 合成负载结果不等同于设备性能。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
-独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
+正式域名已通过标准443 HTTPS入口提供服务，独立9443保留兼容；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
 界面位置与交互规则、设备验证及聊天间距/输入区修复见 [UI.md](docs/UI.md)。原生控件、API26材质和兼容边界见 [NATIVE-UI.md](docs/NATIVE-UI.md)。聊天、会话与待办的新功能和最终交互验收清单见 [WORKSPACE-FEATURES.md](docs/WORKSPACE-FEATURES.md)。任务提醒能力边界见 [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)，移动端输入/大字号/无障碍见 [MOBILE-USABILITY.md](docs/MOBILE-USABILITY.md)。
 

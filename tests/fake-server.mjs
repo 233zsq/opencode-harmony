@@ -252,5 +252,3 @@ const server = http.createServer(async (req, res) => {
   send(res, { error: 'Not found' }, 404);
 });
 server.listen(port, '127.0.0.1', () => console.log('Local V2 fixture: http://127.0.0.1:' + port));
-
-

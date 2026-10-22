@@ -119,4 +119,3 @@ export struct ConversationMessage {
     }
   }
 }
-

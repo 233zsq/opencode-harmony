@@ -633,4 +633,3 @@ await test('authoritative model sync resolves uncertainty and clears its stale w
  await store.sync();assert.ok(requests>0);assert.equal(store.modelUncertain,false);assert.equal(store.modelVariant,'high');assert.equal(store.error,'');assert.equal(store.modelPreferences.recent.length,0);
 });
 console.log(count + ' adapter/state tests passed.');
-

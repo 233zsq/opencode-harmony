@@ -639,4 +639,3 @@ await test('a successful notification connection may restore its remembered proj
 });
 
 console.log(count + ' notification tests passed.');
-
