@@ -31,3 +31,9 @@ __pycache__/
 # Account runtime state is private; production state lives outside the checkout.
 /server/account/*.sqlite3
 /server/account/*.sqlite3-*
+
+# Local development notes; public build and attribution docs stay tracked.
+/docs/*.md
+!/docs/BUILDING.md
+!/docs/THIRD_PARTY.md
+/ui-preview/

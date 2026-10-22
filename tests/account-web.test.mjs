@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
-const runtime=process.env.CODEX_PLAYWRIGHT||'C:/Users/zhens/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright';
+const runtime=process.env.CODEX_PLAYWRIGHT||'playwright';
 const {chromium}=require(runtime);
 const html=readFileSync(process.env.ACCOUNT_WEB_HTML||'.test/account-traffic-fixture.html','utf8');
 assert.ok(html.includes('data-mode="home"'));
