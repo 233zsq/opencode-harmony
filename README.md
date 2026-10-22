@@ -99,7 +99,7 @@ App 地址填写 http://127.0.0.1:4210，账号 opencode，测试密码 local-te
 
 生产使用经验证的 HTTPS URL及 OpenCode API 凭据。SSH 账号和 API 账号不是同一认证体系；v2.0.29 的 Basic 用户名是 opencode。
 
-备案期间已提供独立9443 HTTPS入口，使用专用CA及服务器公钥绑定。App中填写HTTPS地址，勾选“使用专用服务器证书”，无需保持电脑或SSH隧道在线。独立账号、受限文件系统、证书期限及运维边界见 [SERVER.md](docs/SERVER.md)。
+正式域名已提供标准443 HTTPS入口，App填写域名即可，使用系统证书校验。网页提供所有者登录与一次性账号初始化，不开放公共注册；网页与App使用同一账号。设置方式、安全边界及服务测试见 [ACCOUNT.md](docs/ACCOUNT.md)。原IP9443保留专用CA及服务器公钥绑定兼容方式。独立服务账号、受限文件系统、证书期限及运维边界见 [SERVER.md](docs/SERVER.md)。
 
 scripts/provision-server.sh 是供核验后使用的独立实例部署脚本。它拒绝覆盖已有单位或抢占端口；不会运行修改默认后台服务的 opencode service set。
 
