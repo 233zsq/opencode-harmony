@@ -8,3 +8,5 @@ button{cursor:pointer;border:0;border-radius:13px;min-height:46px;padding:10px 1
 @media(prefers-color-scheme:dark){:root{color:#e5eaf2;background:#10141d;--line:#343c4e;--surface:rgba(28,34,47,.86);--muted:#a1acc0;--field:#202737;--blue:#81aaff}body{background:radial-gradient(ellipse at 15% 0%,#1a2a49 0,transparent 52%),radial-gradient(ellipse at 100% 40%,#24223a 0,transparent 42%)}.card{border-color:#ffffff0e}.primary{color:#102447}.message{color:#ffa4b2}}
 @media(max-width:400px){.shell{width:calc(100% - 32px);padding-top:32px}.card{padding:24px}h1{font-size:25px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+
+#traffic-panel{margin:26px 0 24px;padding-top:20px;border-top:1px solid var(--line)}#traffic-panel h2{font-size:16px;font-weight:600;margin:0}.traffic-total{font-size:30px;font-weight:600;letter-spacing:-.5px;margin:8px 0}

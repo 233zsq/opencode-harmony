@@ -19,6 +19,7 @@
       <div class="account-row"><span>当前账号</span><strong>{{ username }}</strong></div>
       <div class="account-row"><span>登录状态</span><span class="state"><i></i>已登录</span></div>
       <p class="hint">在手机的“服务器连接”中，填写本域名，以及你设置的账号和密码。</p>
+      <section id="traffic-panel" aria-label="服务器流量统计" hidden><h2>本月 HTTP 出流量</h2><p id="traffic-total" class="traffic-total"></p><div id="traffic-rows"></div><p id="traffic-period" class="hint"></p><p class="hint">按已完成的公网 HTTP 响应统计，长连接关闭后计入。不含向模型商发送的请求、SSH 等流量；500GB 月额度及实际账单以腾讯云控制台为准。</p></section>
       <button id="logout" class="secondary" type="button" disabled>退出登录</button>
       {% else %}
       <h1 id="title">{% if mode == 'setup' %}设置你的账号{% else %}欢迎回来{% endif %}</h1>

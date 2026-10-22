@@ -1,5 +1,5 @@
 export interface Attachment {
-  id: string; name: string; mime: string; data: string; size: number; uri?: string; error?: string; fingerprint?: string;
+  id: string; name: string; mime: string; data: string; size: number; uri?: string; error?: string; fingerprint?: string; remoteHash?: string; remoteMessage?: string; remoteIndex?: number;
 }
 export interface PromptFile { uri: string; name: string; }
 export const ATTACHMENT_LIMIT = 1048576;

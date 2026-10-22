@@ -5,6 +5,7 @@ import { UsagePanel } from '../components/UsagePanel';
 import { AgentItem } from '../domain/Agents';
 import { AgentPicker } from '../components/AgentPicker';
 import { ExportPanel } from '../components/ExportPanel';
+import { TranscriptCache } from '../data/TranscriptCache';
 import { DocumentSaver } from '../data/DocumentSaver';
 import { DiffContent } from '../components/DiffContent';
 import { Attachment, attachmentProblem } from '../domain/Attachments';
@@ -184,7 +185,11 @@ struct Index {
       this.reminders.attachContext(ability);
       this.reminders.load();
       this.store.attachNotifier(this.reminders, this.foreground);
-      this.store.init(context as common.Context).then((): void => { this.appReady = true; this.consumeNotificationLaunch(); this.tryConsumeLaunch(); });
+      const cache = new TranscriptCache();
+      cache.init(context as common.Context).then((): void => { this.store.attachCache(cache); })
+        .catch((): void => { this.store.cacheNotice = '加密缓存暂不可用，仍可正常联网使用'; })
+        .then((): Promise<void> => this.store.init(context as common.Context))
+        .then((): void => { this.appReady = true; this.consumeNotificationLaunch(); this.tryConsumeLaunch(); });
     }
   }
   aboutToDisappear(): void { if (this.scrollTimer >= 0) { clearTimeout(this.scrollTimer); this.scrollTimer = -1; } this.store.setActive(false); }
@@ -257,7 +262,7 @@ struct Index {
     if (name === 'panel-tool') { return '工具调用详情'; }
     if (name === 'more') { return '更多功能'; }
     if (name === 'provider-auth') { return '连接模型'; }
-    return name === 'pending' ? '待办中心' : name === 'connections' ? '服务器连接' : name === 'projects' ? '项目与会话' : name === 'settings' ? '模型与接入' : name === 'appearance' ? '外观' : name === 'reminders' ? '任务提醒' : '代码审查';
+    return name === 'pending' ? '待办中心' : name === 'connections' ? '服务器连接' : name === 'projects' ? '项目与会话' : name === 'settings' ? '模型与接入' : name === 'appearance' ? '外观' : name === 'reminders' ? '任务提醒' : name === 'storage' ? '存储与流量' : '代码审查';
   }
   private modelLabel(): string {
     const model = this.store.models.find((item: ModelItem) => item.id === this.store.modelID);
@@ -614,6 +619,7 @@ struct Index {
   }
 
   private chatStatus(): string {
+    if (this.store.cacheRestored) { return '本机缓存 · 正在等待联网核对'; }
     if (this.pickingAttachments) { return '正在读取附件…'; }
     if (this.store.pendingSend) { return '发送结果待核对 · 点击同步'; }
     if (this.store.interrupting) { return '正在停止…'; }
@@ -1029,6 +1035,7 @@ struct Index {
           this.actionRow('more-models', $r('sys.symbol.code_square'), '模型与接入', '连接提供商，管理自己的模型', !!this.store.connected, (): void => { this.navigate('settings'); })
           this.actionRow('more-connections', $r('sys.symbol.dot_radiowaves_left_and_right'), '服务器连接', '管理地址、认证与连接状态', true, (): void => { this.navigate('connections'); })
           this.actionRow('more-appearance', $r('sys.symbol.lightbulb'), '外观', '跟随系统、浅色或深色', true, (): void => { this.navigate('appearance'); })
+          this.actionRow('more-storage', $r('sys.symbol.doc'), '存储与流量', '加密缓存、清理和服务器流量', true, (): void => { this.store.refreshCacheSize(); this.navigate('storage'); })
           this.actionRow('more-reminders', $r('sys.symbol.bell'), '任务提醒', '选择需要接收的状态提醒', true, (): void => { this.navigate('reminders'); })
           }.width('100%').backgroundColor(C.surface).borderRadius(18).clip(true)
         }.width('100%')
@@ -1170,6 +1177,34 @@ struct Index {
       notice: this.reminders.lastError,
       onToggle: (group: string, enabled: boolean): void => { this.reminders.setGroup(group as ReminderGroup, enabled); },
       onRequest: (): void => { this.reminders.requestPermission(); } })
+  }
+  @Builder
+  storageSettings() {
+    Column({ space: 14 }) {
+      Text('本机缓存').fontSize(20).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+      Text((this.store.cacheBytes / 1048576).toFixed(1) + ' MB / 200 MB').id('cache-size')
+        .fontSize(24).fontColor(C.text).width('100%')
+      Text('最近会话和已打开的附件加密保存在本机。超过上限会自动淘汰较早使用的内容；待回答和审批仍从服务器实时核对。')
+        .fontSize(14).lineHeight(21).fontColor(C.secondary).width('100%')
+      Button(this.store.cacheBusy ? '正在清理…' : '清空本机缓存').id('clear-local-cache').width('100%').height(44)
+        .fontSize(15).buttonStyle(ButtonStyleMode.NORMAL).enabled(!this.store.cacheBusy)
+        .onClick(() => { this.getUIContext().showAlertDialog({ title: '清空本机缓存', message: '仅清理本机缓存。服务器聊天、模型和文件都会保留。',
+          primaryButton: { value: '取消', action: (): void => {} },
+          secondaryButton: { value: '清理', action: (): void => { this.store.clearCache(); } } }); })
+      if (this.store.cacheNotice) { Text(this.store.cacheNotice).id('cache-notice').fontSize(13).fontColor(C.secondary).width('100%') }
+      Divider().color(C.separator).margin({ top: 10, bottom: 10 })
+      Text('服务器流量').fontSize(20).fontWeight(FontWeight.Medium).fontColor(C.text).width('100%')
+      Text('空闲时使用轻量核对，实时消息由事件更新。图片与文件点按时下载，已缓存的附件直接复用。')
+        .fontSize(14).lineHeight(21).fontColor(C.secondary).width('100%')
+      Button('打开服务器流量统计').id('open-server-traffic').width('100%').height(44).fontSize(15)
+        .enabled(!!this.store.connected).onClick(() => {
+          const server = this.store.servers.find((item: ServerConfig) => item.id === this.store.connected);
+          if (server?.url.startsWith('https://')) { this.openLink(server.url.replace(/\/+$/, '') + '/'); }
+          else { this.toast('请使用正式 HTTPS 域名查看服务器统计'); }
+        })
+      Text('统计页需要网页登录；流量从启用统计时开始记录，账单用量以腾讯云控制台为准。')
+        .fontSize(12).lineHeight(18).fontColor(C.muted).width('100%')
+    }.padding(20).width('100%').alignItems(HorizontalAlign.Start)
   }
   @Builder
   appearanceSettings() {
@@ -1326,6 +1361,7 @@ struct Index {
         else if (name === 'connections') { this.connections() }
         else if (name === 'projects') { this.projects() }
         else if (name === 'pending') { this.pendingCenter() }
+        else if (name === 'storage') { this.storageSettings() }
         else if (name === 'appearance') { this.appearanceSettings() }
         else if (name === 'reminders') { this.reminderSettings() }
         else if (name === 'provider-auth') { ProviderSettings({ store: this.store.providers, detail: true, onOpenLink: (url: string): void => { this.openLink(url); } }) }

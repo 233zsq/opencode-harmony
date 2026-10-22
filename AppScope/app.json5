@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.example.opencode_harmony",
     "vendor": "example",
-    "versionCode": 1000000,
-    "versionName": "1.0.0",
+    "versionCode": 1000001,
+    "versionName": "0.1.0-beta",
     "buildVersion": "1",
     "icon": "$media:opencode_launcher_v1",
     "label": "$string:app_name",

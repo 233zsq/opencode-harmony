@@ -1,6 +1,6 @@
 // Local test fixture, not an OpenCode implementation or a production backend.
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 const port = Number(process.env.PORT || 4210);
 const directory = '/workspace/harmony-fixture';
@@ -19,7 +19,7 @@ const integrations = [
 let permissionReadFailure = false;
 let modelFailure = false;
 let agentFailure=false,agentLost=false,exportFailure=false,exportDelay=false;
-const historyReads=[];
+const historyReads=[];let cacheFileReads=0;
 const agents=[{id:'fixture-build',name:'实施 Agent',description:'实施代码变更',mode:'primary',hidden:false,model:{providerID:'fixture',id:'fixture-coder'}},{id:'fixture-plan',name:'规划 Agent',description:'分析与规划任务',mode:'primary',hidden:false,model:{providerID:'fixture',id:'fixture-second'}},{id:'fixture-hidden',name:'隐藏 Agent',mode:'primary',hidden:true},{id:'fixture-subagent',name:'内部 Agent',mode:'subagent',hidden:false}];
 let uiMessageID = '';
 let active = false;
@@ -84,6 +84,14 @@ async function runPrompt(text) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const path = url.pathname;
+  if (path === '/__test/cache-history' && req.method==='POST') {
+    messages.splice(0, messages.length,
+      {id:'cache_native_user',type:'user',text:'NATIVE_CACHE_PERSISTENCE_FIXTURE',
+       files:[{name:'native-cache.txt',mime:'text/plain',data:Buffer.alloc(196608,120).toString('base64')}],time:{created:1}},
+      {id:'cache_native_reply',type:'assistant',content:[{type:'text',text:'本机加密缓存验收数据'}],time:{created:2,completed:3}});
+    session.title='缓存隔离验收';session.outcome='succeeded';forms.splice(0);permissions.splice(0);active=false;
+    return send(res,{ready:true});
+  }
   if (path === '/__test/control-history' && req.method==='POST') {
     messages.splice(0);messages.push({id:'control_user_first',type:'user',text:'CONTROL_FIRST_QUESTION',time:{created:1}},{id:'control_assistant_first',type:'assistant',content:[{type:'text',text:'CONTROL_FIRST_ANSWER'}],time:{created:2,completed:3}},
       {id:'control_user_edit',type:'user',text:'CONTROL_ORIGINAL_QUESTION',files:[{name:'original.txt',mime:'text/plain',data:Buffer.from('CONTROL_ATTACHMENT').toString('base64')}],time:{created:4}},
@@ -141,7 +149,7 @@ const server = http.createServer(async (req, res) => {
     for(let i=0;i<360;i++)messages.push(i%2===0?{id:'export_'+i,type:'user',text:'EXPORT_ENTRY_'+String(i).padStart(3,'0'),files:i===0?[{name:'metadata-only.txt',mime:'text/plain',data:Buffer.from('EXPORT_INLINE_PRIVATE').toString('base64')}]:[],time:{created:i+1}}:{id:'export_'+i,type:'assistant',content:[{type:'reasoning',text:'EXPORT_REASONING'},{type:'text',text:'EXPORT_ENTRY_'+String(i).padStart(3,'0')},...(i===359?[{type:'tool',id:'fixture-export-tool',name:'read',state:{status:'completed',input:{path:'test.txt'},content:[{type:'text',text:'EXPORT_TOOL_OUTPUT'}]}}]:[])],time:{created:i+1,completed:i+2}});
     event('session.idle',{sessionID:session.id});return send(res,{ready:true});
   }
-  if (path === '/__test/state') return send(res, { receipts, sessions:[...fixtureSessions.values()].map(s=>({id:s.id,parentID:s.parentID,title:s.title,fork:s.fork})), compactions:[...fixtureCompactions.entries()].map(([id,c])=>({sessionID:id,id:c.item.id,phase:c.phase})), historyReads,title:session.title,agent:session.agent,model:session.model,messages: messages.length, forms, permissions, streams: streams.size });
+  if (path === '/__test/state') return send(res, { receipts, sessions:[...fixtureSessions.values()].map(s=>({id:s.id,parentID:s.parentID,title:s.title,fork:s.fork})), compactions:[...fixtureCompactions.entries()].map(([id,c])=>({sessionID:id,id:c.item.id,phase:c.phase})), historyReads,cacheFileReads,title:session.title,agent:session.agent,model:session.model,messages: messages.length, forms, permissions, streams: streams.size });
   if (path === '/__test/disconnect') {
     for (const stream of streams) stream.end();
     return send(res, { disconnected: true });
@@ -149,6 +157,22 @@ const server = http.createServer(async (req, res) => {
   if (req.headers.authorization !== 'Basic ' + Buffer.from('opencode:local-test').toString('base64')) {
     res.setHeader('WWW-Authenticate', 'Basic realm="Local fixture"');
     return send(res, { error: 'Unauthorized' }, 401);
+  }
+  if(process.env.THIN_HISTORY==='1'&&path==='/client-cache/capabilities')return send(res,{data:{version:1}});
+  if(process.env.THIN_HISTORY==='1'&&path.startsWith('/client-cache/session/')){
+    const file=path.match(/^\/client-cache\/session\/([^/]+)\/message\/([^/]+)\/file\/(\d+)$/);
+    const source=file?'/api/session/'+file[1]+'/message/'+file[2]:path.replace('/client-cache/','/api/')+url.search;
+    const response=await fetch('http://127.0.0.1:'+port+source,{headers:{Authorization:req.headers.authorization}});
+    const result=await response.json();if(!response.ok)return send(res,result,response.status);
+    if(file){
+      cacheFileReads++;const item=result.data?.files?.[Number(file[3])];
+      if(!item||createHash('sha256').update(item.data).digest('hex')!==url.searchParams.get('sha256'))return send(res,{error:'fixture file changed'},409);
+      return send(res,{data:{...item,sha256:url.searchParams.get('sha256')}});
+    }
+    for(const message of result.data||[])for(const item of message.files||[]){
+      const data=item.data;item.sha256=createHash('sha256').update(data).digest('hex');item.size=Buffer.from(data,'base64').length;item.data='';
+    }
+    return send(res,result);
   }
   let body = '';
   for await (const chunk of req) body += chunk;

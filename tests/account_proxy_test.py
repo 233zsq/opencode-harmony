@@ -28,6 +28,7 @@ def load(name, path):
 
 account = load("proxy_account", ROOT / "server/account/app.py")
 renderer = load("account_renderer", ROOT / "scripts/prepare-account-entry.py")
+traffic_renderer = load("traffic_renderer", ROOT / "scripts/prepare-traffic-entry.py")
 
 def port():
     with socket.socket() as sock:
@@ -48,6 +49,7 @@ class ProxyTest(unittest.TestCase):
                 "TESTING": True, "DATABASE": str(root / "fixture.sqlite3"),
                 "PUBLIC_ORIGIN": "https://opencode.bigdogaaa.cn",
                 "UPSTREAM_PASSWORD": secret, "RATE_SECRET": secrets.token_hex(32),
+                "HISTORY_FETCH": lambda _: {"data": []},
             })
             token = secrets.token_urlsafe(32)
             with app.account_db() as db:
@@ -79,6 +81,7 @@ class ProxyTest(unittest.TestCase):
                   proxy_pass http://127.0.0.1:BACKEND;
                 }
             """.replace("BACKEND", str(backend.server_port))
+            location += traffic_renderer.THIN_LOCATION.replace("127.0.0.1:4099", "127.0.0.1:" + str(auth.server_port))
             config = root / "nginx.conf"
             config.write_text("""
                 pid PATH/nginx.pid;
@@ -133,6 +136,11 @@ class ProxyTest(unittest.TestCase):
                 cookie = client.get_cookie(account.COOKIE, domain="opencode.bigdogaaa.cn").value
                 self.assertEqual(get("/api/probe", cookie=account.COOKIE + "=" + cookie)[0], 401)
                 self.assertEqual(get("/_opencode_auth", new)[0], 404)
+                self.assertEqual(get("/client-cache/capabilities", new)[0], 200)
+                self.assertEqual(json.loads(get("/client-cache/session/ses_fixture/message", new)[1]), {"data": []})
+                for header in ["", expected]:
+                    self.assertEqual(get("/client-cache/capabilities", header)[0], 401)
+                self.assertEqual(get("/client-cache/capabilities", cookie=account.COOKIE + "=" + cookie)[0], 401)
             finally:
                 process.terminate()
                 process.communicate(timeout=5)

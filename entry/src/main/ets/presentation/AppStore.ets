@@ -10,7 +10,7 @@ import { Storage } from '../data/Storage';
 import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, parseUsage, parseCompactRecord, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
-  DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
+  DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot, TranscriptCachePort, EmptyTranscriptCache } from '../domain/Core';
 import { TaskNotification, TaskNotifySink, NoopTaskNotifier, NotificationLedger, NotificationKind, NotificationTarget,
   pendingNotificationKind, completionEventID, taskNotificationKind, isQuietReminder } from '../domain/Notifications';
 
@@ -160,6 +160,85 @@ export class AppStore {
   useDedicatedTrust: boolean = false;
   reviewTab: string = 'diff';
   pendingSend: PendingPrompt | undefined = undefined;
+  cacheBytes: number = 0;
+  cacheBusy: boolean = false;
+  cacheNotice: string = '';
+  cacheRestored: boolean = false;
+  private transcriptCache: TranscriptCachePort = new EmptyTranscriptCache();
+  private cacheEpoch: number = 0;
+  private lastHistorySync: number = 0;
+  private lastProbe: number = 0;
+  private sessionVersion: number = 0;
+  private streamReady: boolean = false;
+  private probeBusy: boolean = false;
+  private probeEpoch: number = 0;
+  attachCache(cache: TranscriptCachePort): void { this.transcriptCache = cache; this.refreshCacheSize(); }
+  async refreshCacheSize(): Promise<void> {
+    try { this.cacheBytes = await this.transcriptCache.size(); } catch (_) { this.cacheNotice = '本机缓存暂不可用，联网功能不受影响'; }
+  }
+  async clearCache(): Promise<void> {
+    if (this.cacheBusy) { return; }
+    this.cacheBusy = true; this.cacheEpoch++;
+    try { await this.transcriptCache.clear(); this.cacheBytes = 0; this.cacheNotice = '已清空本机缓存，服务器历史仍然保留'; }
+    catch (_) { this.cacheNotice = '缓存未清理完成，请重试'; }
+    finally { this.cacheBusy = false; }
+  }
+  private async restoreOffline(config: ServerConfig, generation: number): Promise<void> {
+    const epoch = this.cacheEpoch;
+    try {
+      const position = await this.storage.last(config.id);
+      if (position.length < 2) { return; }
+      const snapshot = await this.transcriptCache.load(config, position[0], position[1]);
+      if (!snapshot || generation !== this.generation || epoch !== this.cacheEpoch || this.networkBlocked) { return; }
+      this.connected = config.id; this.directory = position[0]; this.sessionID = position[1];
+      this.messages = boundMessageAttachments(snapshot.messages); this.cursor = snapshot.cursor; this.tailLoaded = true;
+      this.interactions = []; this.cacheRestored = true; this.status = '离线缓存'; this.sessionTitle = '缓存会话';
+    } catch (_) {}
+  }
+  private async restoreTranscript(generation: number): Promise<void> {
+    const config = this.api?.config; const id = this.sessionID; const directory = this.directory; const epoch = this.cacheEpoch;
+    if (!config) { return; }
+    try {
+      const snapshot = await this.transcriptCache.load(config, directory, id);
+      if (snapshot && generation === this.generation && epoch === this.cacheEpoch && !this.networkBlocked && !this.lastHistorySync && !this.syncing) {
+        this.messages = boundMessageAttachments(snapshot.messages); this.cursor = snapshot.cursor; this.tailLoaded = true; this.cacheRestored = true;
+      }
+    } catch (_) { this.cacheNotice = '本机缓存暂不可用，正在联网读取'; }
+  }
+  private async cachedFiles(incoming: ChatMessage[], config: ServerConfig | undefined): Promise<void> {
+    for (const message of incoming) {
+      for (const file of message.files || []) {
+        if (file.data || !file.remoteHash) { continue; }
+        const old = this.messages.find((m: ChatMessage) => m.id === message.id)?.files?.find((f: Attachment) => f.id === file.id && f.remoteHash === file.remoteHash);
+        if (old?.data) { file.data = old.data; continue; }
+        if (config) { try { file.data = await this.transcriptCache.file(config, file.remoteHash); } catch (_) {} }
+      }
+    }
+  }
+  private saveTranscript(config: ServerConfig | undefined, id: string, directory: string,
+    messages: ChatMessage[], cursor: string, epoch: number): void {
+    if (!config || epoch !== this.cacheEpoch || this.readingHistory) { return; }
+    this.transcriptCache.save(config, directory, id, { messages: messages, cursor: cursor, savedAt: Date.now() })
+      .then((): void => { this.refreshCacheSize(); }).catch((): void => { this.cacheNotice = '部分内容未能缓存，仍可联网读取'; });
+  }
+  private async poll(): Promise<void> {
+    if (!this.api || !this.sessionID || !this.active || !this.foreground || this.networkBlocked || this.syncing) { return; }
+    const elapsed = Date.now() - this.lastHistorySync;
+    // SSE drives normal updates. A bounded full checkpoint also catches dropped events.
+    if (this.pendingSend || elapsed >= (this.working ? 30000 : this.streamReady ? 300000 : 15000)) {
+      await this.sync(); return;
+    }
+    if (this.probeBusy || Date.now() - this.lastProbe < (this.working ? 15000 : 60000)) { return; }
+    this.lastProbe = Date.now(); this.probeBusy = true; const token = ++this.probeEpoch;
+    const api = this.api; const generation = this.generation; const id = this.sessionID;
+    try {
+      const detail = await api.session(id);
+      if (generation !== this.generation || api !== this.api || token !== this.probeEpoch || !this.active) { return; }
+      const updated = detail.updated || 0;
+      if (updated > 0 && updated !== this.sessionVersion) { await this.sync(); }
+    } catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
+    finally { if (token === this.probeEpoch) { this.probeBusy = false; } }
+  }
   private storage: Storage = new Storage();
   private api: Protocol | undefined = undefined;
   private generation: number = 0;
@@ -234,6 +313,10 @@ export class AppStore {
   private fail(error: Error): void {
     this.error = error.message || '操作失败，请重新连接';
     if (error instanceof ApiError && [401, 403, 495].indexOf(error.code) >= 0) {
+      this.cacheEpoch++;
+      const config = this.api?.config;
+      if (config) { this.transcriptCache.removeServer(config).then((): void => { this.refreshCacheSize(); }).catch((): void => {}); }
+      if (this.cacheRestored) { this.messages = []; this.cacheRestored = false; }
       this.networkBlocked = true; this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.stopNetwork();
       this.pendingError = '连接校验失败，待办状态尚未确认';
       this.pendingItems = this.pendingItems.map((p: PendingItem): PendingItem => ({ id: p.id, sessionID: p.sessionID, directory: p.directory, kind: p.kind, title: p.title, sessionTitle: p.sessionTitle, stale: true }));
@@ -594,12 +677,16 @@ export class AppStore {
       } catch (_) { restored = false; }
       this.error = restored ? '连接配置未保存，请重试；原有配置和凭据已恢复' : '连接保存结果待核对，请重新打开连接页检查后再重试'; this.serverSaving = false; return false;
     }
-    if (identityChanged) { this.conversationMemory.clearServer(config.id); this.clearControlRecords(config.id); }
+    if (identityChanged) {
+      this.conversationMemory.clearServer(config.id); this.clearControlRecords(config.id); this.cacheEpoch++;
+      if (previous) { try { await this.transcriptCache.removeServer(previous); this.refreshCacheSize(); } catch (_) { this.cacheNotice = '旧账号缓存未清理，请在存储设置中重试'; } }
+    }
     this.resetServerForm(); this.serverNotice = '配置已保存';
     try { await this.connect(config); } finally { this.serverSaving = false; }
     return true;
   }
   async removeServer(id: string): Promise<boolean> {
+    const removedConfig = this.servers.find((server: ServerConfig) => server.id === id);
     if (this.serverSaving || this.busy) { return false; }
     if (!this.servers.some((server: ServerConfig) => server.id === id)) { return false; }
     if (id === this.connected && !this.disconnect()) { return false; }
@@ -609,7 +696,9 @@ export class AppStore {
       secret = await this.storage.secret(id); position = await this.storage.last(id); flags = await this.storage.sessionPreferences(id);
       changed = true; await this.storage.resetServerPosition(id); await this.storage.saveSecret(id, ''); await this.storage.saveServers(next);
       this.servers = next; this.conversationMemory.clearServer(id); this.clearControlRecords(id);
-      if (this.serverEditID === id) { this.resetServerForm(); } this.serverNotice = '已从本机移除连接'; return true;
+      if (this.serverEditID === id) { this.resetServerForm(); } this.serverNotice = '已从本机移除连接';
+      if (removedConfig) { this.cacheEpoch++; try { await this.transcriptCache.removeServer(removedConfig); this.refreshCacheSize(); } catch (_) { this.cacheNotice = '部分缓存未清理，请在存储设置中重试'; } }
+      return true;
     } catch (_) {
       let restored = true; if (changed) { try { await this.storage.saveSecret(id, secret); await this.storage.saveServers(previous); await this.storage.position(id, position[0] || '', position[1] || ''); await this.storage.saveSessionPreferences(id, flags); } catch (_) { restored = false; } }
       this.error = restored ? '连接未移除，请重试' : '移除结果待核对，请重新检查本机连接列表'; return false;
@@ -634,6 +723,7 @@ export class AppStore {
     this.sessionMutationBusy = false; this.sessionPreferenceBusy = false; this.runningSessions = []; this.runningUnknown = false; this.showArchived = false;
     this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(undefined, '', async (): Promise<void> => {});
+    this.cacheRestored = false; this.lastHistorySync = 0; this.lastProbe = 0;
     this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接'; this.modelVariant = ''; this.modelPreferenceEpoch++; this.modelPreferences = emptyModelPreferences(); this.modelPreferencesBusy = false; this.modelPreferencesError = '';
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
@@ -657,13 +747,15 @@ export class AppStore {
       const flags = await this.storage.sessionPreferences(config.id);
       const modelPreferences = await this.storage.modelPreferences(config.id);
       if (generation !== this.generation) { return; }
+      await api.enableHistoryCache();
+      if (generation !== this.generation) { return; }
       this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects; this.sessionPreferences = flags; this.modelPreferences = modelPreferences;
       this.pendingBaseline = true; this.syncSuppressNotify = false; this.pendingSuppressNotify = false; this.taskIdlePending = false;
       this.storage.rememberServer(config.id).catch((e: Error) => this.fail(e));
       this.status = '已连接'; this.pane = 'chat'; this.attempts = 0; this.openStream();
       this.pollTimer = setInterval(() => {
         if (this.active) {
-          this.sync().catch((e: Error) => this.fail(e));
+          this.poll().catch((e: Error) => this.fail(e));
           if (Date.now() - this.pendingUpdated > 15000) { this.refreshPending(); }
           if (Date.now() - this.lastData > 45000) { this.streamClose?.(); this.openStream(); }
         }
@@ -685,11 +777,17 @@ export class AppStore {
         }
       }
       return api === this.api && ownedGeneration === this.generation ? ownedGeneration : undefined;
-    } catch (e) { if (generation === this.generation) { this.status = '连接失败'; this.fail(e as Error); } }
+    } catch (e) { if (generation === this.generation) {
+      this.status = '连接失败'; this.fail(e as Error);
+      if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) {
+        this.cacheEpoch++; try { await this.transcriptCache.removeServer(config); this.refreshCacheSize(); } catch (_) {}
+      } else { await this.restoreOffline(config, generation); }
+    } }
     finally { if (generation === this.generation) { this.busy = false; } }
     return undefined;
   }
   private stopNetwork(): void {
+    this.streamReady = false; this.probeEpoch++; this.probeBusy = false;
     this.streamEpoch++;
     if (this.workspaceTimer >= 0) { clearTimeout(this.workspaceTimer); this.workspaceTimer = -1; }
     this.streamClose?.(); this.streamClose = undefined;
@@ -712,14 +810,16 @@ export class AppStore {
   private openStream(): void {
     if (!this.api || !this.active || this.networkBlocked || this.status === '认证失败' || this.status === '证书校验失败') { return; }
     if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); this.retryTimer = -1; }
+    this.streamReady = false;
     this.streamClose?.(); const streamEpoch = ++this.streamEpoch; const generation = this.generation; this.lastData = Date.now();
     this.streamClose = this.api.stream((frame: SseFrame) => {
       if (generation === this.generation && streamEpoch === this.streamEpoch && this.active) { this.onFrame(frame); }
     }, () => { if (generation === this.generation && streamEpoch === this.streamEpoch) { this.lastData = Date.now(); } }, (error: Error) => {
       if (generation !== this.generation || streamEpoch !== this.streamEpoch || !this.active) { return; }
       if (error instanceof ApiError && (error.code === 401 || error.code === 403 || error.code === 495)) {
-        this.networkBlocked = true; this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.error = error.message; this.stopNetwork(); return;
+        this.fail(error as Error); return;
       }
+      this.streamReady = false;
       this.suppressNotificationCatchUp();
       this.status = '重新连接中'; this.attempts++;
       if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); }
@@ -735,7 +835,7 @@ export class AppStore {
     if (id) { this.eventIDs.push(id); if (this.eventIDs.length > 4096) { this.eventIDs.shift(); } }
     if (type === 'server.connected') {
       if (this.attempts > 0) { this.suppressNotificationCatchUp(); }
-      this.status = '实时连接'; this.attempts = 0; this.queueSync(); return;
+      this.streamReady = true; this.status = '实时连接'; this.attempts = 0; this.queueSync(); return;
     }
     const location = string(object(event['location'])['directory']);
     const data = object(event['data']); const sessionID = string(data['sessionID'], string(object(data['form'])['sessionID']));
@@ -773,7 +873,7 @@ export class AppStore {
   private queueSync(): void {
     if (!this.api || !this.active || this.networkBlocked) { return; }
     if (this.refreshTimer >= 0) { return; }
-    this.refreshTimer = setTimeout(() => { this.refreshTimer = -1; this.sync().catch((e: Error) => this.fail(e)); }, 200);
+    this.refreshTimer = setTimeout(() => { this.refreshTimer = -1; this.sync().catch((e: Error) => this.fail(e)); }, 750);
   }
   async selectProject(directory: string): Promise<void> {
     if (!this.api || !directory.trim()) { return; }
@@ -821,6 +921,7 @@ export class AppStore {
     this.cancelExport(); this.agentEpoch++; this.agentID = session.agent || ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
+    this.cacheRestored = false; this.lastHistorySync = 0; this.lastProbe = 0; this.sessionVersion = 0; this.probeEpoch++; this.probeBusy = false;
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model; this.modelVariant = session.variant || ''; this.resetSessionControl(); this.parentSessionID = session.parentID || ''; this.branchBoundary = session.forkType === 'before' ? '所选消息之前' : session.forkType === 'through' ? '创建分叉时的最后一条消息' : '';
     // Existing history and pending items are seeded on the first sync; they are
     // never announced as new while the user is opening the conversation.
@@ -828,17 +929,23 @@ export class AppStore {
     this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
     const saved = this.conversationMemory.read(this.connected, this.directory, session.id);
     this.draft = saved.text; this.attachments = saved.files || []; this.pendingSend = saved.pending; this.working = false; this.interrupting = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); this.queueWorkspace();
-    const generation = this.generation; this.busy = true; await this.sync(); if (generation === this.generation) { this.busy = false; }
+    const generation = this.generation; this.busy = true; await this.restoreTranscript(generation);
+    if (generation !== this.generation) { return; }
+    await this.sync(); if (generation === this.generation) { this.busy = false; }
   }
   async sync(): Promise<void> {
     if (!this.api || !this.sessionID || !this.active || this.networkBlocked) { return; }
     if (this.syncing) { this.syncAgain = true; return; }
     this.syncing = true; const generation = this.generation; const api = this.api;
     const id = this.sessionID; const epoch = this.eventEpoch; const transcript = this.transcriptEpoch; const selection = this.selectionEpoch;
+    const cacheEpoch = this.cacheEpoch; const directory = this.directory;
+    const cachedBaseline = this.cacheRestored && !this.readingHistory ? this.messages : undefined;
     try {
       const response = await api.messages(id);
-      if (generation !== this.generation || transcript !== this.transcriptEpoch) { return; }
+      if (generation !== this.generation || transcript !== this.transcriptEpoch || this.networkBlocked) { return; }
       const incoming = api.parseMessages(response);
+      await this.cachedFiles(incoming, api.config);
+      if (generation !== this.generation || transcript !== this.transcriptEpoch || this.networkBlocked) { return; }
       const safe = incoming.map((m: ChatMessage): ChatMessage => {
         const current = this.messages.find((old: ChatMessage) => old.id === m.id);
         if (current && m.state !== 'completed' &&
@@ -851,9 +958,16 @@ export class AppStore {
       if (this.readingHistory) {
         if (safe.some((m: ChatMessage) => !this.messages.some((old: ChatMessage) => old.id === m.id))) { this.newerAvailable = true; }
         this.messages = mergeMessages(this.messages, safe.filter((m: ChatMessage) => this.messages.some((old: ChatMessage) => old.id === m.id)));
-      } else { const merged = mergeMessages(this.messages, safe); this.messages = merged.length > 300 ? merged.slice(-300) : merged; }
+      } else {
+        // A disk tail may be separated from the server tail by more than one page.
+        // Replace that baseline, retaining messages changed by SSE during this read.
+        const previous = cachedBaseline ? this.messages.filter((m: ChatMessage) => cachedBaseline.indexOf(m) < 0) : this.messages;
+        const merged = mergeMessages(previous, safe, cachedBaseline !== undefined); this.messages = merged.length > 300 ? merged.slice(-300) : merged;
+      }
       this.messages = boundMessageAttachments(this.messages);
-      if (!this.tailLoaded) { this.cursor = string(object(object(response)['cursor'])['next']); this.tailLoaded = true; }
+      this.cacheRestored = false; this.lastHistorySync = Date.now(); this.lastProbe = Date.now();
+      this.saveTranscript(api.config, id, directory, safe, string(object(object(response)['cursor'])['next']), cacheEpoch);
+      if (!this.tailLoaded || cachedBaseline) { this.cursor = string(object(object(response)['cursor'])['next']); this.tailLoaded = true; }
       if (this.pendingSend) {
         const pending = this.pendingSend; let confirmed = incoming.some((m: ChatMessage) => m.id === pending.id);
         if (!confirmed) {
@@ -870,6 +984,7 @@ export class AppStore {
       const inbox = rows(await api.request('/api/session/' + encodeURIComponent(id) + '/inbox'));
       if (generation === this.generation) {
         if (usageEpoch === this.usageEpoch) { this.usage = parseUsage(detail); this.usageError = ''; }
+        this.sessionVersion = Number(object(detail['time'])['updated']) || 0;
         this.readBranch(detail); this.updateCompactPage(response, inbox);
         this.runningSessions = Object.keys(active);
         const title = string(detail['title'], this.sessionTitle);
@@ -961,14 +1076,37 @@ export class AppStore {
     if (item.data || !this.api) { return item; }
     const message = this.messages.find((m: ChatMessage) => m.files?.some((f: Attachment) => f.id === item.id));
     if (!message) { return item; }
-    const generation = this.generation;
+    const generation = this.generation; const epoch = this.cacheEpoch; const api = this.api; const config = api.config; const sessionID = this.sessionID;
     try {
-      const result = await this.api.request(this.sessionPath() + '/message/' + encodeURIComponent(message.id));
-      if (generation !== this.generation) { return item; }
-      const envelope: Json = {}; const entries: Object[] = [object(result)['data']]; envelope['data'] = entries;
-      return this.api.parseMessages(envelope)[0]?.files?.find((f: Attachment) => f.id === item.id) || item;
+      let file: Attachment | undefined = undefined;
+      if (item.remoteHash) {
+        let data = '';
+        if (config) { try { data = await this.transcriptCache.file(config, item.remoteHash); } catch (_) { this.cacheNotice = '附件缓存暂不可用，正在联网读取'; } }
+        if (generation !== this.generation || api !== this.api) { return item; }
+        file = data ? { id: item.id, name: item.name, mime: item.mime, size: item.size, data: data,
+          fingerprint: item.remoteHash, remoteHash: item.remoteHash, remoteMessage: item.remoteMessage, remoteIndex: item.remoteIndex } :
+          await api.historyFile(sessionID, item);
+        if (config && !data && file.data && epoch === this.cacheEpoch) {
+          try { await this.transcriptCache.saveFile(config, item.remoteHash, file.data); this.refreshCacheSize(); }
+          catch (_) { this.cacheNotice = '附件已读取，本次未能缓存'; }
+        }
+      } else {
+        const result = await api.request(this.sessionPath() + '/message/' + encodeURIComponent(message.id));
+        const envelope: Json = {}; const entries: Object[] = [object(result)['data']]; envelope['data'] = entries;
+        file = api.parseMessages(envelope)[0]?.files?.find((f: Attachment) => f.id === item.id);
+      }
+      if (generation !== this.generation || api !== this.api) { return item; }
+      if (file) {
+        const ready = file;
+        this.messages = this.messages.map((m: ChatMessage): ChatMessage => m.id === message.id ? {
+          id: m.id, role: m.role, text: m.text, reasoning: m.reasoning, parts: m.parts, tools: m.tools, state: m.state,
+          files: m.files?.map((f: Attachment): Attachment => f.id === item.id ? ready : f)
+        } : m);
+      }
+      return file || item;
     } catch (_) { return { id: item.id, name: item.name, mime: item.mime, size: item.size, data: '', error: '读取失败，请关闭后重试' }; }
   }
+
   async send(): Promise<void> {
     if (!this.api || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy || ['queued', 'running', 'submitting'].indexOf(this.compaction.state) >= 0 || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
     const pending: PendingPrompt = this.pendingSend || {

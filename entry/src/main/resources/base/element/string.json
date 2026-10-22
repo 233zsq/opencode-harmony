@@ -2,11 +2,11 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "HarmonyOS 原生 OpenCode 远程客户端"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "连接自己的 OpenCode 服务器，继续对话与开发任务"
     },
     {
       "name": "EntryAbility_label",

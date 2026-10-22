@@ -31,6 +31,24 @@
       notice.hidden = false; return;
     }
     if (form) form.hidden = false;
+    if (mode === "home") {
+      api("/auth/traffic").then(function (result) {
+        const summary = result.data;
+        if (!summary || !summary.available) return;
+        function bytes(value) { return value >= 1e9 ? (value / 1e9).toFixed(2) + " GB" : (value / 1e6).toFixed(1) + " MB"; }
+        const labels = {opencode:"OpenCode",fieldnotes:"FieldNotes",other:"其他站点"};
+        document.getElementById("traffic-total").textContent = bytes(summary.http_bytes);
+        const rows = document.getElementById("traffic-rows");
+        Object.keys(labels).forEach(function (key) {
+          const row = document.createElement("div"); row.className = "account-row";
+          const label = document.createElement("span"); label.textContent = labels[key];
+          const value = document.createElement("strong"); value.textContent = bytes((summary.projects[key] || {}).bytes || 0);
+          row.append(label, value); rows.appendChild(row);
+        });
+        document.getElementById("traffic-period").textContent = summary.month + " · 从 " + new Date(summary.started_at).toLocaleString("zh-CN") + " 开始记录，每五分钟更新。";
+        document.getElementById("traffic-panel").hidden = false;
+      }).catch(function () {});
+    }
     const logout = document.getElementById("logout");
     if (logout) {
       logout.disabled = false;
