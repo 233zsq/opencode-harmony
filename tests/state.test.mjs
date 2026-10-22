@@ -632,4 +632,92 @@ await test('authoritative model sync resolves uncertainty and clears its stale w
  store.active=true;let requests=0;const source={messages:[],active:{},detail:{outcome:'succeeded',model:{id:'base',providerID:'p',variant:'high'}}};store.api=reminderApi(source);const read=store.api.request;store.api.request=async(path,method)=>{assert.notEqual(method,'POST');requests++;return read(path);};
  await store.sync();assert.ok(requests>0);assert.equal(store.modelUncertain,false);assert.equal(store.modelVariant,'high');assert.equal(store.error,'');assert.equal(store.modelPreferences.recent.length,0);
 });
+
+function trafficStore() {
+ const store=new AppStore();let pages=0,probes=0;
+ store.sessionID='ses_a';store.directory='/repo';store.streamReady=true;
+ store.lastHistorySync=Date.now();store.lastProbe=Date.now();store.sessionVersion=7;
+ store.api={config:{id:'a',url:'https://cache.example',username:'owner'},
+  session:async()=>{probes++;return{id:'ses_a',updated:7};},
+  messages:async()=>{pages++;return{data:[],cursor:{next:''}};},parseMessages:()=>[],
+  interactions:async()=>[],request:async path=>path.endsWith('/inbox')?{data:[]}:{data:{time:{updated:7},outcome:'succeeded'}}};
+ return{store,pages:()=>pages,probes:()=>probes};
+}
+await test('healthy idle SSE does not download another history page on a five-second tick',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=Date.now()-6000;await t.store.poll();assert.equal(t.pages(),0);assert.equal(t.probes(),0);
+});
+await test('unchanged idle session performs only a lightweight version probe after one minute',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=Date.now()-70000;t.store.lastProbe=Date.now()-70000;await t.store.poll();
+ assert.equal(t.pages(),0);assert.equal(t.probes(),1);
+});
+await test('changed lightweight version refreshes history and controls',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=Date.now()-70000;t.store.lastProbe=0;
+ t.store.api.session=async()=>({id:'ses_a',updated:8});await t.store.poll();assert.equal(t.pages(),1);
+});
+await test('five-minute checkpoint reconciles even an unchanged timestamp or lost SSE event',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=Date.now()-301000;await t.store.poll();assert.equal(t.pages(),1);
+});
+await test('running tasks and a disconnected SSE keep shorter recovery checkpoints',async()=>{
+ const running=trafficStore();running.store.working=true;running.store.lastHistorySync=Date.now()-31000;await running.store.poll();assert.equal(running.pages(),1);
+ const disconnected=trafficStore();disconnected.store.streamReady=false;disconnected.store.lastHistorySync=Date.now()-16000;await disconnected.store.poll();assert.equal(disconnected.pages(),1);
+});
+await test('background grace window does not perform periodic transcript polling',async()=>{
+ const t=trafficStore();t.store.foreground=false;t.store.lastHistorySync=0;await t.store.poll();assert.equal(t.pages(),0);
+});
+await test('cached transcript can survive an offline initial read without restoring approval cards',async()=>{
+ const t=trafficStore();t.store.connected='a';t.store.lastHistorySync=0;t.store.api.stream=()=>()=>{};
+ t.store.api.messages=async()=>{throw new Error('offline');};
+ t.store.attachCache({size:async()=>1,load:async()=>({messages:[message('cached','saved')],cursor:'older',savedAt:1,interactions:[form()]}),save:async()=>{},clear:async()=>{},removeServer:async()=>{},file:async()=>'',saveFile:async()=>{}});
+ await t.store.openSession({id:'ses_a',directory:'/repo',title:'cached',model:''});
+ assert.equal(t.store.messages[0].id,'cached');assert.equal(t.store.cacheRestored,true);assert.equal(t.store.interactions.length,0);
+});
+await test('late disk cache cannot overwrite a newly selected session',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=0;let release;
+ t.store.attachCache({size:async()=>0,load:()=>new Promise(resolve=>release=resolve)});
+ const loading=t.store.restoreTranscript(0);t.store.generation++;t.store.sessionID='ses_new';
+ release({messages:[message('old','old')],cursor:'',savedAt:1});await loading;assert.equal(t.store.messages.length,0);
+});
+await test('clearing cache during an outstanding history read does not repopulate disk from that read',async()=>{
+ const t=trafficStore();let release,writes=0,clears=0;
+ t.store.api.messages=()=>new Promise(resolve=>release=resolve);
+ t.store.attachCache({size:async()=>0,save:async()=>{writes++;},clear:async()=>{clears++;}});
+ const pending=t.store.sync();await t.store.clearCache();release({data:[],cursor:{next:''}});await pending;
+ assert.equal(clears,1);assert.equal(writes,0);
+});
+await test('enhanced history strips image payloads and ordinary servers retain their original route',async()=>{
+ const api=new protocol.Protocol({url:'https://cache.example',username:'owner'},'');
+ const paths=[];api.request=async path=>{paths.push(path);return path==='/client-cache/capabilities'?{data:{version:1}}:{data:[]};};
+ await api.enableHistoryCache();await api.messages('ses_a');assert.ok(paths.at(-1).startsWith('/client-cache/session/'));
+ const normal=new protocol.Protocol({url:'https://normal.example',username:'owner'},'');const ordinary=[];
+ normal.request=async path=>{ordinary.push(path);if(path==='/client-cache/capabilities')throw new protocol.ApiError(404,'missing');return{data:[]};};
+ await normal.enableHistoryCache();await normal.messages('ses_a');assert.ok(ordinary.at(-1).startsWith('/api/session/'));
+});
+await test('thin image metadata reuses the disk blob and avoids a second network attachment fetch',async()=>{
+ const t=trafficStore();let downloads=0,writes=0;const data=Buffer.from('fixture-image').toString('base64'),hash='a'.repeat(64);
+ const file={id:'m-file-0',name:'a.png',mime:'image/png',data:'',size:13,remoteHash:hash,remoteMessage:'m',remoteIndex:0};
+ t.store.messages=[{...message('m',''),files:[file]}];let cached='';
+ t.store.attachCache({size:async()=>0,file:async()=>cached,saveFile:async(_c,_h,value)=>{writes++;cached=value;}});
+ t.store.api.historyFile=async()=>{downloads++;return{...file,data};};
+ assert.equal((await t.store.attachmentPreview(file)).data,data);
+ t.store.messages=[{...message('m',''),files:[file]}];assert.equal((await t.store.attachmentPreview(file)).data,data);
+ assert.equal(downloads,1);assert.equal(writes,1);
+});
+
+await test('disk read/write failure never blocks an available online attachment',async()=>{
+ const t=trafficStore(),data=Buffer.from('online-content').toString('base64');
+ const file={id:'m-file-0',name:'a.png',mime:'image/png',data:'',size:14,remoteHash:'b'.repeat(64),remoteMessage:'m',remoteIndex:0};
+ t.store.messages=[{...message('m',''),files:[file]}];
+ t.store.attachCache({size:async()=>0,file:async()=>{throw new Error('disk unavailable');},saveFile:async()=>{throw new Error('disk full');}});
+ t.store.api.historyFile=async()=>({...file,data});
+ const preview=await t.store.attachmentPreview(file);assert.equal(preview.data,data);assert.equal(preview.error,undefined);
+ assert.match(t.store.cacheNotice,/未能缓存/);
+});
+await test('a delayed disk read after navigation cannot launch an obsolete attachment request',async()=>{
+ const t=trafficStore();let release,downloads=0;
+ const file={id:'m-file-0',name:'a.png',mime:'image/png',data:'',size:14,remoteHash:'c'.repeat(64),remoteMessage:'m',remoteIndex:0};
+ t.store.messages=[{...message('m',''),files:[file]}];
+ t.store.attachCache({size:async()=>0,file:()=>new Promise(resolve=>{release=resolve;}),saveFile:async()=>{}});
+ t.store.api.historyFile=async()=>{downloads++;return file;};
+ const pending=t.store.attachmentPreview(file);t.store.generation++;release('');await pending;assert.equal(downloads,0);
+});
 console.log(count + ' adapter/state tests passed.');

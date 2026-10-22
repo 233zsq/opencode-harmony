@@ -49,6 +49,25 @@ export interface TextPart { ordinal: number; type: string; text: string; ended?:
 export interface ChatMessage {
   id: string; role: string; text: string; reasoning: string; parts: TextPart[]; tools: ToolItem[]; state: string; files?: Attachment[];
 }
+export interface TranscriptSnapshot { messages: ChatMessage[]; cursor: string; savedAt: number; }
+export interface TranscriptCachePort {
+  load(config: ServerConfig, directory: string, id: string): Promise<TranscriptSnapshot | undefined>;
+  save(config: ServerConfig, directory: string, id: string, snapshot: TranscriptSnapshot): Promise<void>;
+  file(config: ServerConfig, hash: string): Promise<string>;
+  saveFile(config: ServerConfig, hash: string, data: string): Promise<void>;
+  removeServer(config: ServerConfig): Promise<void>;
+  size(): Promise<number>;
+  clear(): Promise<void>;
+}
+export class EmptyTranscriptCache implements TranscriptCachePort {
+  async load(config: ServerConfig, directory: string, id: string): Promise<TranscriptSnapshot | undefined> { return undefined; }
+  async save(config: ServerConfig, directory: string, id: string, snapshot: TranscriptSnapshot): Promise<void> {}
+  async file(config: ServerConfig, hash: string): Promise<string> { return ''; }
+  async saveFile(config: ServerConfig, hash: string, data: string): Promise<void> {}
+  async removeServer(config: ServerConfig): Promise<void> {}
+  async size(): Promise<number> { return 0; }
+  async clear(): Promise<void> {}
+}
 export interface DiffLine { id: string; kind: string; text: string; oldLine: string; newLine: string; }
 export interface MarkdownBlock { id: string; kind: string; text: string; language: string;  rows?: string[][]; align?: string[]; depth?: number; marker?: string; checked?: boolean; level?: number; }
 export interface Choice { value: string; label: string; description: string; }
@@ -442,7 +461,7 @@ export function boundMessageAttachments(messages: ChatMessage[], limit: number =
       if (!file.data) { return file; }
       const size = Math.ceil(file.data.length * 3 / 4);
       if (bytes + size <= limit) { bytes += size; return file; }
-      removed = true; return { id: file.id, name: file.name, mime: file.mime, size: file.size, data: '', fingerprint: file.fingerprint, error: '预览已释放，点按重新读取' };
+      removed = true; return { id: file.id, name: file.name, mime: file.mime, size: file.size, data: '', fingerprint: file.fingerprint, remoteHash: file.remoteHash, remoteMessage: file.remoteMessage, remoteIndex: file.remoteIndex, error: '预览已释放，点按重新读取' };
     });
     if (removed) { changed = true; result[i] = { id: message.id, role: message.role, text: message.text, reasoning: message.reasoning, parts: message.parts, tools: message.tools, state: message.state, files: files }; }
   }

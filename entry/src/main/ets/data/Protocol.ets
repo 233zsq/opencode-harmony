@@ -99,6 +99,20 @@ export function parseCompactRecord(value: Object): CompactRecord {
 
 export class Protocol {
   private compactHistory: Set<string> = new Set<string>();
+  private thinHistory: boolean = false;
+  async enableHistoryCache(): Promise<void> {
+    try { const result = object(object(await this.request('/client-cache/capabilities'))['data']); this.thinHistory = result['version'] === 1; }
+    catch (e) { if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) { throw e; } this.thinHistory = false; }
+  }
+  private historyPath(id: string): string { return (this.thinHistory ? '/client-cache/session/' : '/api/session/') + encodeURIComponent(id) + '/message'; }
+  async historyFile(id: string, item: Attachment): Promise<Attachment> {
+    if (!this.thinHistory || !item.remoteMessage || !/^[a-f0-9]{64}$/.test(item.remoteHash || '') || item.remoteIndex === undefined) { throw new Error('附件信息已失效'); }
+    const value = object(object(await this.request(this.historyPath(id) + '/' + encodeURIComponent(item.remoteMessage) + '/file/' + item.remoteIndex + '?sha256=' + item.remoteHash))['data']);
+    if (string(value['sha256']) !== item.remoteHash) { throw new Error('附件校验失败'); }
+    const file = historyAttachment(item.id, item.name, item.mime, string(value['data']));
+    return { id: file.id, name: file.name, mime: file.mime, data: file.data, size: file.size, error: file.error,
+      fingerprint: item.remoteHash, remoteHash: item.remoteHash, remoteMessage: item.remoteMessage, remoteIndex: item.remoteIndex };
+  }
   private auth: string;
   config: ServerConfig;
   constructor(config: ServerConfig, password: string) {
@@ -238,9 +252,9 @@ export class Protocol {
   async messages(id: string, cursor: string = ''): Promise<Object> {
     if (this.compactHistory.has(id)) { return this.smallMessages(id, cursor); }
     try {
-      return await this.request('/api/session/' + encodeURIComponent(id) + '/message?limit=30&' + (cursor ? 'cursor=' + encodeURIComponent(cursor) : 'order=desc'));
+      return await this.request(this.historyPath(id) + '?limit=30&' + (cursor ? 'cursor=' + encodeURIComponent(cursor) : 'order=desc'));
     } catch (e) {
-      if (e instanceof ApiError) { throw e; }
+      if (e instanceof ApiError && e.code !== 413) { throw e; }
       // A large attachment page may exceed the 2 MB response bound. GET-only fallback also tolerates transient reads.
       const page = await this.smallMessages(id, cursor); this.compactHistory.add(id); return page;
     }
@@ -248,7 +262,7 @@ export class Protocol {
   private async smallMessages(id: string, cursor: string): Promise<Object> {
     let data: Object[] = []; let next = cursor; let characters = 0;
     for (let page = 0; page < 8; page++) {
-      const response = await this.request('/api/session/' + encodeURIComponent(id) + '/message?limit=1&' + (next ? 'cursor=' + encodeURIComponent(next) : 'order=desc'));
+      const response = await this.request(this.historyPath(id) + '?limit=1&' + (next ? 'cursor=' + encodeURIComponent(next) : 'order=desc'));
       const chunk = rows(response); data = data.concat(chunk); characters += JSON.stringify(chunk).length;
       const after = string(object(object(response)['cursor'])['next']);
       if (!after || after === next || !chunk.length) { next = ''; break; }
@@ -274,7 +288,12 @@ export class Protocol {
         parts.filter((p: TextPart) => p.type === 'text').map((p: TextPart) => p.text).join('\n') || (role === 'assistant' ? (failure['message'] ? '模型调用失败：' + string(failure['message']).slice(0, 500) : '') : role === 'compaction' ? (m['status'] === 'completed' ? '上下文压缩已完成' : m['status'] === 'failed' ? '上下文压缩失败' : '正在压缩上下文') : role === 'model-switched' ? '会话模型已切换' : role === 'agent-switched' ? 'Agent 已切换' : role === 'location-switched' ? '工作目录已切换' : '会话状态已更新');
       return { id: string(m['id']), role: role, text: text,
         reasoning: parts.filter((p: TextPart) => p.type === 'reasoning').map((p: TextPart) => p.text).join('\n'),
-        files: list(m['files']).slice(0, 4).map((v: Object, index: number): Attachment => { const file = object(v); return historyAttachment(string(m['id']) + '-file-' + index, string(file['name']), string(file['mime']), string(file['data'])); }),
+        files: list(m['files']).slice(0, 4).map((v: Object, index: number): Attachment => {
+          const file = object(v); const item = historyAttachment(string(m['id']) + '-file-' + index, string(file['name']), string(file['mime']), string(file['data']));
+          const hash = string(file['sha256']);
+          return /^[a-f0-9]{64}$/.test(hash) ? { id: item.id, name: item.name, mime: item.mime, data: '', size: Number(file['size']) || 0,
+            fingerprint: hash, remoteHash: hash, remoteMessage: string(m['id']), remoteIndex: index } : item;
+        }),
         parts: parts, tools: tools, state: m['finish'] === 'error' ? 'failed' : object(m['time'])['completed'] ? 'completed' : 'streaming' };
     }).filter((m: ChatMessage) => m.id.length > 0 && m.role !== 'idle');
   }
