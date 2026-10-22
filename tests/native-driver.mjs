@@ -12,7 +12,12 @@ export function layout(){cmd('shell','uitest dumpLayout -i -p /data/local/tmp/co
 const aliases={'open-menu':'__NavigationField__NavigationMenu__MenuItem2__native-navigation','native-back':'__NavdestinationField__BackButton__Back__native-destination'};
 export const find=(q,nodes=layout())=>nodes.findLast(n=>n.visible!=='false'&&bounds(n)[2]>0&&bounds(n)[0]>=0&&bounds(n)[3]>0&&bounds(n)[1]<2832&&(n.id===q||n.text===q||(aliases[q]&&n.id===aliases[q])||(q==='open-sidebar'&&n.parent==='native-sidebar-container'&&n.type==='Button')));
 export async function wait(q,timeout=14000){const end=Date.now()+timeout;do{const n=find(q);if(n)return n;await pause(300);}while(Date.now()<end);throw new Error('Native control missing: '+q);}
-export async function tap(q){const n=typeof q==='string'?await wait(q):q;assert.ok(n);const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(450);}
+export async function tap(q){
+ let n=typeof q==='string'?await wait(q):q;assert.ok(n);const key=typeof q==='string'?q:n.id||n.text;
+ const end=Date.now()+14000;while(n.enabled==='false'&&Date.now()<end){await pause(250);n=find(key)||n;}
+ assert.notEqual(n.enabled,'false','Native control is disabled: '+key);
+ const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(450);
+}
 export async function back(){cmd('shell','uitest uiInput keyEvent Back');await pause(1300);}
 export async function reveal(q){
  for(let i=0;i<22;i++){
@@ -28,6 +33,26 @@ export async function reveal(q){
  }
  throw new Error('Cannot reveal: '+q);
 }
-export async function input(q,text){assert.ok(!text.includes("'"));await tap(await reveal(q));cmd('shell','uitest uiInput keyEvent 2072 2017');cmd('shell','uitest uiInput keyEvent 2055');if(text)cmd('shell',"uitest uiInput text '"+text+"'");await pause(350);}
+export function keyboardVisible(nodes=layout()) { return nodes.some(n=>n.visible!=='false' &&
+ (n.type==='WindowScene' && (/^keyboard(?:Panel)?[0-9]+$/.test(n.id||'') || /inputmethod/i.test(n.bundleName||'')) || n.id==='SkinBgContent') && bounds(n)[3]-bounds(n)[1]>200); }
+export async function dismissKeyboard() {
+ if(!keyboardVisible())return;
+ cmd('shell','uitest uiInput keyEvent Back');await pause(600);
+ const end=Date.now()+10000;while(keyboardVisible()&&Date.now()<end)await pause(250);
+ assert.ok(!keyboardVisible(),'Dismiss the native IME before testing app-level taps or Back.');
+}
+export async function input(q,text,{keepKeyboard=false}={}){assert.ok(!text.includes("'"));await tap(await reveal(q));cmd('shell','uitest uiInput keyEvent 2072 2017');cmd('shell','uitest uiInput keyEvent 2055');if(text)cmd('shell',"uitest uiInput text '"+text+"'");await pause(350);if(!keepKeyboard)await dismissKeyboard();}
 export async function shot(name){cmd('shell','snapshot_display -f /data/local/tmp/complete-ui.jpeg');cmd('file','recv','/data/local/tmp/complete-ui.jpeg',resolve('.test/'+name+'.jpeg'));}
-export async function menu(name){await tap('open-menu');await tap(name);await pause(1000);}
+export async function menu(name){
+ await dismissKeyboard();
+ if(!find('more-functions-page')){
+  await tap('open-menu');await pause(700);
+  // When HDC leaves the root entry unchanged after returning
+  // from a native surface, retry only this idempotent root entry.
+  if(!find('more-functions-page')&&find('model-select')&&!find('native-back')&&!find('sidebar-dismiss')&&!find('model-quick-picker')&&!find('session-name-scope')){
+   console.log('INFO native root entry required one repeated injected More tap');await tap('open-menu');
+  }
+  await wait('more-functions-page');
+ }
+ await tap(await reveal(name));await pause(1000);
+}

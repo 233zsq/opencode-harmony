@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {tap,find,wait,back,pause,input,layout,bounds,cmd,shot,menu,reveal,dismissKeyboard} from './native-driver.mjs';
+const endpoint='http://127.0.0.1:'+(process.env.OPENCODE_FIXTURE_PORT||4210);
+if(find('native-back')){await tap('native-back');await pause(700);}if(find('model-quick-picker'))await back();if(find('sidebar-dismiss'))await back();await wait('本机测试模型',45000);assert.equal(find('model-select')?.text,'本机测试模型','Select only the loopback fixture.');
+const state=async()=>await(await fetch(endpoint+'/__test/state')).json();
+const before=(await state()).receipts.filter(r=>r.path.endsWith('/prompt')).length;
+for(const phase of ['thinking','answer','tool-done'])assert.equal((await fetch(endpoint+'/__test/ui-phase?phase='+phase,{method:'POST'})).status,200);
+for(let i=(await state()).sessions.length;i<18;i++)assert.equal((await fetch(endpoint+'/api/session/ses_fixture/fork',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Basic '+Buffer.from('opencode:local-test').toString('base64')},body:'{}'})).status,200);
+await pause(1800);await tap('open-sidebar');await wait('history-list');await pause(600);
+await tap('history-filter');await tap('history-refresh');await pause(1500);
+let nodes=layout(),side=bounds(find('history-sidebar',nodes)),list=bounds(find('history-list',nodes)),screen=bounds(nodes.find(n=>n.type==='root'));
+const ratio=(side[2]-side[0])/(screen[2]-screen[0]);assert.ok(ratio>=.80&&ratio<=.86,'Sidebar should use ~84% of the phone width');
+assert.ok((list[3]-list[1])/(side[3]-side[1])>=.66,'History should retain two thirds of the sidebar after the single workspace entry');
+for(const id of ['close-sidebar','sidebar-projects','nav-review','nav-settings','nav-reminders','nav-pending'])assert.ok(!find(id,nodes),'Old sidebar chrome must be removed: '+id);
+assert.ok(!nodes.some(n=>n.visible!=='false'&&n.text==='你的开发空间'));
+assert.ok(nodes.filter(n=>n.visible!=='false'&&n.id?.startsWith('sidebar-session-')&&bounds(n)[1]>=list[1]&&bounds(n)[3]<=list[3]).length>=10,'At least ten normal history titles should fit');
+await shot('history-glass-dark-sidebar');console.log('PASS native history geometry and removal of sidebar chrome');
+const sessionCreates=(await state()).receipts.filter(r=>r.method==='POST'&&r.path==='/api/session').length;
+cmd('shell','uitest uiInput click '+Math.round((side[2]+screen[2])/2)+' 280');await pause(900);assert.ok(!find('sidebar-dismiss'));assert.ok(find('chat-input'));
+assert.equal((await state()).receipts.filter(r=>r.method==='POST'&&r.path==='/api/session').length,sessionCreates,'Outside tap must be consumed, not trigger underlying New Chat');
+await tap('open-sidebar');await tap('history-filter');await tap('history-archived');await pause(600);assert.ok(find('暂无匹配对话，可搜索服务器历史或切换归档。'));
+await tap('history-filter');await tap('history-recent');await pause(600);assert.ok(await reveal('sidebar-session-ses_fixture'));
+await input('history-search','NoMatchingHistory');if(find('SkinBgContent'))await back();await pause(500);assert.ok(find('暂无匹配对话，可搜索服务器历史或切换归档。'));
+await input('history-search','');if(find('SkinBgContent'))await back();await pause(500);assert.ok(await reveal('sidebar-session-ses_fixture'));
+await tap(await reveal('session-actions-ses_fixture'));await wait('session-name-scope');await wait('session-local-scope');await pause(800);await dismissKeyboard();await shot('history-glass-session-actions');await back();assert.ok(!find('session-name-scope'),'Back dismisses the session sheet before returning to history');if(find('sidebar-dismiss'))await back();assert.ok(!find('sidebar-dismiss'));await pause(700);await menu('代码审查');await wait('native-back');await tap('native-back');await wait('chat-input');
+console.log('PASS outside dismissal, archive, search and review navigation');await menu('外观');const original=layout().find(n=>n.text?.startsWith('当前外观：'))?.text.slice(5);assert.ok(['跟随系统','浅色','深色'].includes(original));
+try{
+ await tap('浅色');await pause(700);await tap('native-back');await wait('chat-input');await pause(1800);await pause(1800);await tap('open-sidebar');await wait('history-list');await pause(600);await shot('history-glass-light-sidebar');await back();
+ await tap('model-select');await wait('model-quick-picker');await wait('quick-model-option-fixture/fixture-coder');await pause(800);const area=bounds(find('model-quick-picker'));assert.ok(area[2]-area[0]>800&&area[3]-area[1]>500,'Model popup must render a real visible surface');await shot('history-glass-light-model');await back();assert.ok(!find('model-quick-picker'),'Theme-switched model popup must close on the first Back');
+}finally{await menu('外观');await tap(original);await pause(700);await tap('native-back');await wait('chat-input');await pause(1800);}
+await tap('model-select');await wait('model-quick-picker');await wait('quick-model-option-fixture/fixture-coder');await pause(800);const area=bounds(find('model-quick-picker'));assert.ok(area[2]-area[0]>800&&area[3]-area[1]>500,'Model popup must render a real visible surface');await shot('history-glass-dark-model');await back();
+assert.equal((await state()).receipts.filter(r=>r.path.endsWith('/prompt')).length,before);
+console.log('PASS history-first sidebar: 84% width, 66%+ list height, ten visible rows, outside dismissal without click-through, filter/archive/search, back, moved review entry, and both glass themes; no prompt sent.');

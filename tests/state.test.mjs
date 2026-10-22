@@ -18,7 +18,7 @@ const httpMock = {
     destroy() {}, on() {}, requestInStream: async (url, options) => { requests.push({ url, options }); return 200; }
   })
 };
-class StorageMock { async sessionPreferences() { return []; } async saveSessionPreferences() {} async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} async activeServer() { return ''; } async rememberServer() {} }
+class StorageMock { async modelPreferences() { return {enabled:[],favorites:[],recent:[]}; } async saveModelPreferences() {} async sessionPreferences() { return []; } async saveSessionPreferences() {} async init() {} async servers() { return []; } async secret() { return 'test-only'; } async last() { return []; } async position() {} async activeServer() { return ''; } async rememberServer() {} }
 const modules = new Map([
   ['@kit.NetworkKit', { http: httpMock }],
   ['@kit.ArkTS', { util: { TextEncoder: Encoder, TextDecoder: Decoder, Base64Helper: Base64 } }],
@@ -40,6 +40,7 @@ function load(file, key) {
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
 modules.set('./Core', modules.get('../domain/Core'));
+load('entry/src/main/ets/domain/ModelSelection.ts', '../domain/ModelSelection');
 load('entry/src/main/ets/domain/Connections.ts', '../domain/Connections');
 load('entry/src/main/ets/domain/SessionUsage.ts', '../domain/SessionUsage');
 const trust = load('entry/src/main/ets/data/DedicatedTrust.ets', './DedicatedTrust');
@@ -47,6 +48,7 @@ const agentsDomain=load('entry/src/main/ets/domain/Agents.ts', '../domain/Agents
 const exportsDomain=load('entry/src/main/ets/domain/TranscriptExport.ts', '../domain/TranscriptExport');
 const protocol = load('entry/src/main/ets/data/Protocol.ets', '../data/Protocol');
 const { ProviderStore } = load('entry/src/main/ets/presentation/ProviderStore.ets', './ProviderStore');
+const notificationsDomain = load('entry/src/main/ets/domain/Notifications.ts', '../domain/Notifications');
 const { AppStore } = load('entry/src/main/ets/presentation/AppStore.ets', 'store');
 let count = 0;
 async function test(name, run) { await run(); count++; console.log('PASS ' + name); }
@@ -121,8 +123,8 @@ await test('event from other project or session is ignored', async () => {
 });
 await test('model switching sends raw modelID, not catalog identity', async () => {
   const store = new AppStore(); store.sessionID = 'ses_a'; store.active = false;
-  let request;
-  store.api = { request: async (path, method, body) => { request = body; } };
+  let request;store.models=[{id:'provider/actual/model',label:'Exact'}];store.modelPreferences={enabled:['provider/actual/model'],favorites:[],recent:[]};
+  store.api = { request: async (path, method, body) => { if(method==='POST')request=body;return {data:{model:{id:'actual/model',providerID:'provider'}}}; } };
   await store.chooseModel('provider/actual/model');
   assert.deepEqual(JSON.parse(JSON.stringify(request)), { model: { id: 'actual/model', providerID: 'provider' } });
 });
@@ -347,7 +349,8 @@ await test('new channel and server changes clear prior editor values and never c
  store.customName='Old';store.attach(undefined,'/new',async()=>{});assert.equal(store.customName,'');assert.equal(store.catalog.length,0);
 });
 await test('provider quick entry selects the server declared key form and catalog search remains bounded',async()=>{
- const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',supported:true,fields:[]}],accounts:[]}];store.quickSelect('deepseek');assert.equal(store.selected,'deepseek');assert.equal(store.methodType,'key');
+ const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',methods:[{id:'key',type:'key',supported:true,fields:[]}],accounts:[]}];assert.equal(store.quickSelect('deepseek'),true);assert.equal(store.selected,'deepseek');assert.equal(store.methodType,'key');
+ assert.equal(store.quickSelect('unavailable-provider'),false,'An unavailable shortcut must not open the previous provider form');assert.equal(store.search,'unavailable-provider');assert.equal(store.selected,'deepseek');
  store.catalog=Array.from({length:100},(_,i)=>({id:'p/mimo-'+i,label:'MiMo '+i}));store.modelSearch='mimo';assert.equal(store.modelMatches().length,100);assert.equal(store.visibleModels().length,60);store.modelSearch='not present';assert.equal(store.visibleModels().length,0);
 });
 
@@ -535,7 +538,98 @@ await test('credential submission freezes key and account label before asynchron
  assert.equal(writes[0].key,'fixture-original');assert.equal(writes[0].label,'Original');
 });
 await test('a successful model switch clears previous errors while a rejected switch retains the current model',async()=>{
- const store=new AppStore();store.sessionID='s';store.active=false;store.modelID='p/old';store.error='Old error';store.api={request:async()=>({})};await store.chooseModel('p/new');assert.equal(store.modelID,'p/new');assert.equal(store.error,'');
+ const store=new AppStore();store.sessionID='s';store.active=false;store.modelID='p/old';store.error='Old error';store.models=[{id:'p/new',label:'New'},{id:'p/bad',label:'Bad'}];store.modelPreferences={enabled:['p/new','p/bad'],favorites:[],recent:[]};store.api={request:async()=>({data:{model:{id:'new',providerID:'p'}}})};await store.chooseModel('p/new');assert.equal(store.modelID,'p/new');assert.equal(store.error,'');
  store.api.request=async()=>{throw new protocol.ApiError(400,'Unsupported model');};await store.chooseModel('p/bad');assert.equal(store.modelID,'p/new');assert.match(store.error,/Unsupported/);
+});
+const reminderSink=()=>{const events=[];return{events,publish(event){events.push(event);}};};
+const reminderApi=state=>({stream:()=>()=>{},session:async id=>({id,title:id,directory:'/repo',status:'idle',model:''}),messages:async()=>({data:[],cursor:{}}),parseMessages:()=>state.messages,
+  interactions:async()=>[],request:async path=>path==='/api/session/active'?{data:state.active}:path.endsWith('/inbox')?{data:[]}:{data:state.detail}});
+await test('reminders: initial history stays quiet and one completion alerts once',async()=>{
+  const sink=reminderSink();const store=new AppStore();store.connected='one';store.directory='/repo';store.active=true;store.attachNotifier(sink,false);
+  const state={messages:[message('m0','old')],active:{},detail:{outcome:'succeeded'}};store.api=reminderApi(state);
+  await store.openSession({id:'ses_a',title:'A',directory:'/repo',model:''});assert.equal(sink.events.length,0);
+  state.messages=[message('m0','old'),message('m1','new')];state.active={};
+  store.onFrame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'ses_a',assistantMessageID:'m1',ordinal:0,delta:'x'}})});
+  store.onFrame({data:JSON.stringify({type:'session.idle',data:{sessionID:'ses_a'}})});await store.sync();
+  assert.equal(sink.events.length,1);assert.equal(sink.events[0].kind,'completed');assert.equal(sink.events[0].eventID,'idle:m1');
+  await store.sync();assert.equal(sink.events.length,1);
+});
+await test('reminders: the same event ID on another server is not suppressed',async()=>{
+  const ledger=new notificationsDomain.NotificationLedger();const event={serverID:'a',directory:'/repo',sessionID:'s',kind:'completed',eventID:'evt'};
+  assert.equal(ledger.offer(event),true);assert.equal(ledger.offer({...event,serverID:'b'}),true);assert.equal(ledger.offer({...event}),false);
+});
+await test('reminders: opening a notification target keeps unsent drafts',async()=>{
+  const sink=reminderSink();const store=new AppStore();store.connected='one';store.directory='/repo';store.active=true;store.attachNotifier(sink,false);
+  store.servers=[{id:'one',name:'One',url:'https://one.example',username:'opencode',allowHttp:false}];
+  const state={messages:[],active:{},detail:{outcome:'succeeded'}};store.api=reminderApi(state);
+  store.sessions=[{id:'ses_a',title:'A',directory:'/repo',status:'idle',model:''},{id:'ses_b',title:'B',directory:'/repo',status:'idle',model:''}];
+  await store.openSession(store.sessions[0]);store.draft='draft A';
+  assert.equal(await store.openNotificationTarget({serverID:'one',directory:'/repo',sessionID:'ses_b',eventID:'evt'}),true);
+  assert.equal(store.sessionID,'ses_b');assert.equal(store.draft,'');
+  assert.equal(await store.openNotificationTarget({serverID:'one',directory:'/repo',sessionID:'ses_a',eventID:'evt'}),true);
+  assert.equal(store.draft,'draft A');
+  assert.equal(await store.openNotificationTarget({serverID:'removed',directory:'/repo',sessionID:'ses_a',eventID:'evt'}),false);
+  assert.equal(store.sessionID,'ses_a');assert.equal(store.targetBusy,false);
+});
+await test('reminders: a throwing notifier cannot break chat sync or set a chat error',async()=>{
+  const store=new AppStore();store.connected='one';store.directory='/repo';store.active=true;store.attachNotifier({publish(){throw new Error('platform failure');}},false);
+  const state={messages:[message('m0','old')],active:{},detail:{outcome:'succeeded'}};store.api=reminderApi(state);
+  await store.openSession({id:'ses_a',title:'A',directory:'/repo',model:''});
+  state.messages=[message('m0','old'),message('m1','new')];state.active={};
+  store.onFrame({data:JSON.stringify({type:'session.text.delta',data:{sessionID:'ses_a',assistantMessageID:'m1',ordinal:0,delta:'x'}})});
+  store.onFrame({data:JSON.stringify({type:'session.idle',data:{sessionID:'ses_a'}})});await store.sync();
+  assert.ok(store.messages.some(item=>item.id==='m1'));assert.equal(store.error,'');
+});
+await test('reminders: denied permission only disables reminders, not the task flow',async()=>{
+  const prefs=notificationsDomain.defaultReminderPrefs();
+  assert.equal(notificationsDomain.shouldPublish(prefs,'completed','disabled'),false);
+  assert.equal(notificationsDomain.shouldPublish(prefs,'approval','unsupported'),false);
+  assert.equal(notificationsDomain.shouldPublish(prefs,'question','enabled'),true);
+  const store=new AppStore();
+  assert.equal(store.foreground,true);store.disconnect();assert.equal(store.reminderQuiet,'');
+});
+await test('provider browse page keeps other entries reachable after selecting an authentication target',async()=>{
+ const store=new ProviderStore();store.entries=[{id:'deepseek',name:'DeepSeek',accounts:[],methods:[]},{id:'opencode',name:'OpenCode',accounts:[],methods:[]}];store.selected='deepseek';
+ assert.equal(store.filtered().map(p=>p.id).join(','),'deepseek');
+ assert.equal(store.filtered(false).map(p=>p.id).join(','),'deepseek,opencode');
+ store.search='OpenCode';assert.equal(store.filtered(false).map(p=>p.id).join(','),'opencode');
+});
+
+function modelControlStore(){
+ const store=new AppStore();store.connected='model-server';store.sessionID='model-session';store.directory='/repo';store.active=false;store.modelID='p/base';
+ store.models=[{id:'p/base',label:'Base',variants:['low','high']},{id:'p/other',label:'Other',variants:[]},{id:'p/off',label:'Off',available:false}];
+ store.modelPreferences={enabled:['p/base','p/other','p/off'],favorites:[],recent:[]};const posts=[],saved=[];let ref={id:'base',providerID:'p'};
+ store.storage={saveServers:async()=>{},saveModelPreferences:async(server,prefs)=>saved.push({server,prefs})};
+ store.api={request:async(path,method,body)=>{if(method==='POST'){posts.push(body);ref=body.model;return{};}return{data:{model:ref}};}};
+ return{store,posts,saved};
+}
+await test('reasoning variants use the exact V2 model reference and default omits variant',async()=>{
+ const{store,posts,saved}=modelControlStore();assert.equal(await store.chooseModel('p/base','high'),true);assert.deepEqual(JSON.parse(JSON.stringify(posts[0])),{model:{id:'base',providerID:'p',variant:'high'}});assert.equal(store.modelVariant,'high');assert.equal(saved[0].server,'model-server');
+ assert.equal(await store.chooseModel('p/base',''),true);assert.ok(!('variant' in posts[1].model));assert.equal(store.modelVariant,'');assert.equal(store.modelPreferences.recent.join(','),'p/base');
+});
+await test('unknown or disabled model/variant selections never post or update recent history',async()=>{
+ const{store,posts}=modelControlStore();await store.chooseModel('p/base','invented');await store.chooseModel('p/off');await store.chooseModel('missing/model');assert.equal(posts.length,0);assert.equal(store.modelPreferences.recent.length,0);
+ store.modelPreferences.enabled=[];await store.chooseModel('p/other');assert.equal(posts.length,0);assert.match(store.error,/启用/);
+});
+await test('rejected variants preserve confirmed selection and recent history',async()=>{
+ const{store,posts}=modelControlStore();store.modelVariant='low';store.api.request=async()=>{throw new protocol.ApiError(400,'Rejected variant');};assert.equal(await store.chooseModel('p/base','high'),false);assert.equal(store.modelVariant,'low');assert.equal(store.modelUncertain,false);assert.equal(store.modelPreferences.recent.length,0);
+});
+await test('an uncertain model write blocks sends and duplicate selection until authoritative sync',async()=>{
+ const{store,posts}=modelControlStore();store.api.request=async()=>{throw new Error('lost acknowledgement');};assert.equal(await store.chooseModel('p/base','high'),false);assert.equal(store.modelUncertain,true);store.draft='Do not send';await store.send();await store.chooseModel('p/other');assert.equal(posts.length,0);assert.equal(store.modelPreferences.recent.length,0);
+});
+await test('concurrent model switching and late replies cannot affect a different connection',async()=>{
+ const{store,posts}=modelControlStore();let release;store.api.request=async()=>new Promise(resolve=>release=resolve);const first=store.chooseModel('p/base','high');await Promise.resolve();assert.equal(await store.chooseModel('p/other'),false);store.generation++;store.connected='another-server';store.modelID='other/kept';release({});assert.equal(await first,false);assert.equal(store.modelID,'other/kept');assert.equal(store.modelPreferences.recent.length,0);
+});
+await test('model preferences apply only after a successful flush and retain the previous UI on failure',async()=>{
+ const{store}=modelControlStore();const before=JSON.stringify(store.modelPreferences);store.storage.saveModelPreferences=async()=>{throw new Error('disk full');};assert.equal(await store.favoriteModel('p/base',true),false);assert.equal(JSON.stringify(store.modelPreferences),before);assert.match(store.modelPreferencesError,/未保存/);
+});
+await test('V2 model and session parsing retain variants and server availability without inventing reasoning levels',async()=>{
+ const api=new protocol.Protocol({id:'test',name:'Test',url:'http://127.0.0.1:4210',username:'opencode',allowHttp:true},'');api.request=async()=>({data:[{providerID:'p',modelID:'one',name:'One',enabled:false,variants:[{id:'high'},{id:'custom-overlay'},{id:'high'},{}]}]});
+ const models=await api.models('/repo');assert.equal(models[0].available,false);assert.equal(models[0].variants.join(','),'high,custom-overlay');assert.equal(api.parseSession({id:'s',model:{id:'one',providerID:'p',variant:'high'}}).variant,'high');
+});
+await test('authoritative model sync resolves uncertainty and clears its stale warning without replaying a write',async()=>{
+ const{store}=modelControlStore();store.api.request=async()=>{throw new Error('lost acknowledgement');};await store.chooseModel('p/base','high');assert.equal(store.modelUncertain,true);
+ store.active=true;let requests=0;const source={messages:[],active:{},detail:{outcome:'succeeded',model:{id:'base',providerID:'p',variant:'high'}}};store.api=reminderApi(source);const read=store.api.request;store.api.request=async(path,method)=>{assert.notEqual(method,'POST');requests++;return read(path);};
+ await store.sync();assert.ok(requests>0);assert.equal(store.modelUncertain,false);assert.equal(store.modelVariant,'high');assert.equal(store.error,'');assert.equal(store.modelPreferences.recent.length,0);
 });
 console.log(count + ' adapter/state tests passed.');

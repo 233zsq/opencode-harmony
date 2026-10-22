@@ -154,7 +154,7 @@ export class Protocol {
     const s = object(value); const location = object(s['location']); const model = object(s['model']);
     return { id: string(s['id']), title: string(s['title'], '未命名会话'), directory: string(location['directory'], directory),
       status: 'idle', model: model['id'] ? string(model['providerID']) + '/' + string(model['id']) : '',
-      agent: string(s['agent']), parentID: string(object(s['fork'])['sessionID'], string(s['parentID'])), forkType: string(object(object(s['fork'])['boundary'])['type']), forkBefore: string(object(object(s['fork'])['boundary'])['messageID']), updated: Number(object(s['time'])['updated']) || 0, archived: !!object(s['time'])['archived'] };
+      variant: string(model['variant']), agent: string(s['agent']), parentID: string(object(s['fork'])['sessionID'], string(s['parentID'])), forkType: string(object(object(s['fork'])['boundary'])['type']), forkBefore: string(object(object(s['fork'])['boundary'])['messageID']), updated: Number(object(s['time'])['updated']) || 0, archived: !!object(s['time'])['archived'] };
   }
   async session(id: string): Promise<SessionItem> {
     const session = this.parseSession(object(await this.request('/api/session/' + encodeURIComponent(id)))['data']);
@@ -183,7 +183,8 @@ export class Protocol {
   async models(directory: string): Promise<ModelItem[]> {
     return rows(await this.request('/api/model?' + this.scope(directory))).map((v: Object): ModelItem => {
       const m = object(v);
-      return { id: string(m['providerID']) + '/' + string(m['modelID']), label: string(m['name'], string(m['modelID'])), input: list(object(m['capabilities'])['input']).map((v: Object) => string(v)), contextLimit: usageValue(object(m['limit'])['context']) };
+      const variants = Array.from(new Set(list(m['variants']).map((value: Object): string => string(object(value)['id'])).filter((id: string) => !!id && id.length <= 200)));
+      return { available: m['enabled'] !== false, variants: variants, id: string(m['providerID']) + '/' + string(m['modelID']), label: string(m['name'], string(m['modelID'])), input: list(object(m['capabilities'])['input']).map((v: Object) => string(v)), contextLimit: usageValue(object(m['limit'])['context']) };
     }).filter((m: ModelItem) => !m.id.endsWith('/'));
   }
   async fork(id: string, before: string): Promise<SessionItem> {

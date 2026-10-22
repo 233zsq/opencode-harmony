@@ -8,13 +8,17 @@ const url=process.env.OPENCODE_TEST_URL;
 if(!url?.startsWith('https://'))throw new Error('Set OPENCODE_TEST_URL to the dedicated HTTPS endpoint');
 const ca=readFileSync(resolve(root,'.server-access/tls/ca.pem'),'utf8');
 const pin=JSON.parse(readFileSync(resolve(root,'.server-access/tls/public-trust.json'),'utf8')).pin;
-const env=Object.fromEntries(readFileSync(resolve(root,'.server-access/server.env'),'utf8').trim().split(/\r?\n/).map(line=>{const i=line.indexOf('=');return [line.slice(0,i),line.slice(i+1)];}));
-const auth='Basic '+Buffer.from('opencode:'+env.OPENCODE_PASSWORD).toString('base64');
+// Owner credentials may be injected for this run without persisting the new password.
+const env=process.env.OPENCODE_TEST_PASSWORD ? {} : Object.fromEntries(readFileSync(resolve(root,'.server-access/server.env'),'utf8').trim().split(/\r?\n/).map(line=>{const i=line.indexOf('=');return [line.slice(0,i),line.slice(i+1)];}));
+const username=process.env.OPENCODE_TEST_USERNAME||env.OPENCODE_USERNAME||'opencode';
+const passwordValue=process.env.OPENCODE_TEST_PASSWORD||env.OPENCODE_PASSWORD;
+if(!passwordValue||username.includes(':'))throw new Error('Supply the current owner credentials privately');
+const auth='Basic '+Buffer.from(username+':'+passwordValue).toString('base64');
 function request(path, {authenticated=false, password, trust=true, badName=false, expectedPin=pin, sse=false, headers={}, method='GET'}={}) {
   return new Promise((resolve,reject)=>{
     const options={agent:false, ca:trust?ca:undefined, method, headers:{...headers}};
     if(authenticated)options.headers.Authorization=auth;
-    if(password)options.headers.Authorization='Basic '+Buffer.from('opencode:'+password).toString('base64');
+    if(password)options.headers.Authorization='Basic '+Buffer.from(username+':'+password).toString('base64');
     if(badName)options.servername='wrong-host.invalid';
     const task=https.request(url+path,options,res=>{
       const cert=res.socket.getPeerCertificate();const key=new X509Certificate(cert.raw).publicKey.export({type:'spki',format:'der'});

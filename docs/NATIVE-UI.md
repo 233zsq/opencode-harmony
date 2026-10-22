@@ -1,5 +1,9 @@
 # HarmonyOS 原生界面（2026-10-16）
 
+当前页面层级、字号和视觉以 [2026-10-21 历史侧栏与系统光感](HISTORY-AND-MATERIALS.md)为准；下面按日期保留此前的设计与验收记录。
+
+最新实现已通过运行时保护动态加载 API26 的 uiMaterial，为模型 Popup 显式设置系统材质。下文未导入专属模块的描述属于早期版本；当前兼容与验证边界见上面的最新记录。
+
 ## 控件与交互
 
 聊天仍是首页。管理页面改用 Navigation / NavDestination，保留系统返回按钮和返回手势；页面状态随原生路由同步，避免下一次流式更新重新推入已退出的页面。顶部保留原生模型 Select、历史入口及系统新对话菜单项，功能入口位于 Navigation 原生菜单区，操作列表使用原生 bindSheet 半模态面板，外观为独立设置页。功能面板在恢复连接时保持打开，入口位置固定，未就绪的入口禁用；工具详情在切换会话时关闭。
@@ -13,6 +17,14 @@
 按[华为官方启用指南](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/arkts-immersive-light-sense-enable)，目标 API26 的 entry 模块声明 ohos.arkui.UIMaterial.state=enable。系统对原生导航、菜单、选择器、分段按钮和半模态面板提供适用的材质效果；聊天正文保持清晰阅读。
 
 没有导入只在 API26 存在的 uiMaterial 模块，也没有用全屏模糊模拟系统材质。最低兼容仍为 API24，旧系统沿用普通原生控件样式。具体光感效果受设备能力、系统设置和辅助功能影响；模拟器运行不代替 API26 真机的材质与性能验收。
+
+## Graphite 材质层（2026-10-20）
+
+视觉重构新增两层材质，均不依赖 API26 专有模块：
+
+- **系统层**：顶部导航、系统菜单、分段控件和半模态继续使用系统控件；`bindSheet` 配置 `blurStyle: COMPONENT_ULTRA_THICK`、`maskColor`、1px 描边、外阴影和圆角，在 API26 上由已启用的 UIMaterial 提供沉浸材质，API24 回退系统普通样式。面板内容背景保持透明，避免覆盖系统材质。
+- **应用自绘层**：`components/Material.ets` 的 `GlassPanel` 使用 `backgroundEffect({radius, saturation, brightness, color})` + 半透明资源色 + 1px 高光描边 + 内侧/外侧阴影 + 顶部高光 overlay，用于输入区、侧栏抽屉和浮动按钮等自绘悬浮层；`StatusLed` 提供运行/连接状态的小方形 LED 与低频脉冲。正文、工具行、代码块、表格保持实底，不参与材质。
+- 材质只作为视觉层，不改变任何交互、路由、组件 ID 或业务状态；输入区尺寸约束、思考/工具行高度和列表间距保持既有原生几何回归要求。
 
 ## 验证
 

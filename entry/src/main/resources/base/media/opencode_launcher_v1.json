@@ -1,0 +1,6 @@
+{
+  "layered-image": {
+    "background": "$media:opencode_background_v1",
+    "foreground": "$media:opencode_mark_v1"
+  }
+}

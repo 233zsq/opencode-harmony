@@ -1,3 +1,4 @@
+import { ModelPreferences, emptyModelPreferences, enabledModels, setModelEnabled, setModelFavorite, rememberModel } from '../domain/ModelSelection';
 import { prepareConnection, sameConnectionIdentity, ConnectionInput } from '../domain/Connections';
 import { SessionUsage, emptyUsage, CompactRecord } from '../domain/SessionUsage';
 import { AgentItem } from '../domain/Agents';
@@ -10,11 +11,13 @@ import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, parseUsage, parseCompactRecord, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
   DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot } from '../domain/Core';
+import { TaskNotification, TaskNotifySink, NoopTaskNotifier, NotificationLedger, NotificationKind, NotificationTarget,
+  pendingNotificationKind, completionEventID, taskNotificationKind, isQuietReminder } from '../domain/Notifications';
 
 interface CreateRequest { title: string; location: LocationRequest; }
 interface LocationRequest { directory: string; }
 interface PromptRequest { id: string; text: string; delivery: string; resume: boolean; files?: PromptFile[]; }
-interface ModelRef { id: string; providerID: string; }
+interface ModelRef { id: string; providerID: string; variant?: string; }
 interface ModelRequest { model: ModelRef; }
 interface HistoryResponse { data: Object[]; }
 interface AgentRequest { agent: string; }
@@ -59,6 +62,13 @@ export class AppStore {
   sessionTitle: string = '';
   models: ModelItem[] = [];
   modelID: string = '';
+  modelVariant: string = '';
+  modelBusy: boolean = false;
+  modelUncertain: boolean = false;
+  modelPreferences: ModelPreferences = emptyModelPreferences();
+  modelPreferencesBusy: boolean = false;
+  modelPreferencesError: string = '';
+  private modelPreferenceEpoch: number = 0;
   agents: AgentItem[] = [];
   agentID: string = '';
   agentError: string = '';
@@ -165,6 +175,25 @@ export class AppStore {
   private eventEpoch: number = 0;
   private eventIDs: string[] = [];
   private initialized: boolean = false;
+  taskNotifier: TaskNotifySink = new NoopTaskNotifier();
+  foreground: boolean = true;
+  conversationVisible: boolean = true;
+  reminderQuiet: string = '';
+  reminderQuietSeq: number = 0;
+  targetBusy: boolean = false;
+  // Short best-effort window after leaving the foreground. The existing SSE
+  // connection is kept alive; the system may freeze it at any time. This is not
+  // a background service and never polls or keeps the process artificially alive.
+  private backgroundReminderTimer: number = -1;
+  private notificationLedger: NotificationLedger = new NotificationLedger();
+  private notifyBaseline: boolean = false;
+  private syncSuppressNotify: boolean = false;
+  // The first global pending read after (re)connecting seeds existing items.
+  private pendingBaseline: boolean = true;
+  private pendingSuppressNotify: boolean = false;
+  private taskIdlePending: boolean = false;
+  private runningTokens: Map<string, number> = new Map<string, number>();
+  private runningTokenSeq: number = 0;
 
   async init(context: common.Context): Promise<void> {
     if (this.initialized) { return; }
@@ -173,6 +202,34 @@ export class AppStore {
       const server = this.servers.find((s: ServerConfig) => s.id === last);
       if (server) { await this.connect(server); } }
     catch (e) { this.fail(e as Error); }
+  }
+  // Injected once by the Index page: the platform notification center in the
+  // app and a recording fake in the Node tests. AppStore never imports the
+  // notification platform modules itself.
+  attachNotifier(sink: TaskNotifySink, foreground: boolean = true): void {
+    this.taskNotifier = sink; this.foreground = foreground;
+  }
+  setForeground(foreground: boolean): void {
+    this.foreground = foreground;
+    if (!foreground) { this.suppressNotificationCatchUp(); }
+  }
+  beginBackgroundReminderWindow(ms: number): void {
+    this.foreground = false;
+    this.cancelBackgroundReminderWindow();
+    this.backgroundReminderTimer = setTimeout(() => {
+      this.backgroundReminderTimer = -1;
+      this.setActive(false);
+    }, ms);
+  }
+  cancelBackgroundReminderWindow(): void {
+    if (this.backgroundReminderTimer >= 0) { clearTimeout(this.backgroundReminderTimer); this.backgroundReminderTimer = -1; }
+  }
+  // Leaving the foreground pauses the existing network loop. The first sync and
+  // pending refresh after coming back must seed state instead of alerting for
+  // work that finished while the app was away.
+  private suppressNotificationCatchUp(): void {
+    this.syncSuppressNotify = true;
+    this.pendingSuppressNotify = true;
   }
   private fail(error: Error): void {
     this.error = error.message || '操作失败，请重新连接';
@@ -189,15 +246,17 @@ export class AppStore {
   }
   private questionDrafts(): QuestionDraft[] { return this.interactions.filter((p: Interaction) => p.kind === 'form').map((p: Interaction): QuestionDraft => ({ id: p.id, fields: p.fields })); }
   private clearSavedDraft(): void { this.conversationMemory.save(this.connected, this.directory, this.sessionID, '', undefined, this.questionDrafts()); }
-  sessionRows(search: string = ''): SessionItem[] {
+  private knownSessions(): SessionItem[] {
     const sessions = this.sessions.slice();
     this.sessionPreferences.forEach((p: SessionPreference) => {
       if (p.directory === this.directory && p.title && !sessions.some((s: SessionItem) => s.id === p.id)) {
         sessions.push({ id: p.id, title: p.title, directory: p.directory, status: 'idle', model: '' });
       }
     });
-    return filterSessions(sessions, this.sessionPreferences, search || this.sessionQuery, this.showArchived);
+    return sessions;
   }
+  sessionRows(search: string = ''): SessionItem[] { return filterSessions(this.knownSessions(), this.sessionPreferences, search || this.sessionQuery, this.showArchived); }
+  recentSessions(): SessionItem[] { return filterSessions(this.knownSessions(), this.sessionPreferences, '', false).slice(0, 3); }
   sessionLabel(id: string): string {
     const label = sessionStatus(id, this.runningSessions, this.pendingItems);
     return label === '运行中' && this.runningUnknown ? '运行状态待确认' : label;
@@ -278,6 +337,8 @@ export class AppStore {
         const active = object(object(await api.request('/api/session/active'))['data']);
         if (api !== this.api || epoch !== this.pendingEpoch) { return; }
         this.runningSessions = Object.keys(active); this.runningUnknown = false;
+        await this.detectSessionCompletions(this.runningSessions, api, epoch);
+        if (api !== this.api || epoch !== this.pendingEpoch) { return; }
       } catch (e) {
         if (api !== this.api || epoch !== this.pendingEpoch) { return; }
         this.runningUnknown = true; errors.push('运行状态读取失败');
@@ -303,6 +364,7 @@ export class AppStore {
       this.pendingItems = Array.from(unique.values()).slice(0, 500);
       this.pendingError = errors.join('；') + (truncated ? '。显示范围已达上限，请打开对应项目单独处理。' : '');
       this.pendingUpdated = Date.now();
+      this.detectPendingNotifications(errors.length > 0);
     } finally { if (epoch === this.pendingEpoch) { this.pendingBusy = false; } }
   }
   async openPending(item: PendingItem): Promise<void> {
@@ -322,6 +384,166 @@ export class AppStore {
       this.queueWorkspace();
     } catch (e) { if (api === this.api) { this.fail(e as Error); } }
     finally { if (api === this.api) { this.busy = false; } }
+  }
+  private lastAssistantMessage(): ChatMessage | undefined {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const message = this.messages[i];
+      if (message.role === 'assistant') { return message; }
+    }
+    return undefined;
+  }
+  private completionEvent(outcome: string = ''): TaskNotification | undefined {
+    if (!this.connected || !this.sessionID) { return undefined; }
+    const last = this.lastAssistantMessage();
+    const kind = taskNotificationKind(outcome, last?.state || '');
+    if (!kind || (last?.state === 'streaming' && kind !== 'failed')) { return undefined; }
+    // A single completion identity per assistant message. The message state can
+    // move from streaming to completed between two syncs; including it would
+    // create a second notification for the same finished task.
+    const eventID = completionEventID(last ? last.id : '', this.sessionID);
+    return { serverID: this.connected, directory: this.directory, sessionID: this.sessionID,
+      kind: kind, eventID: eventID, sessionTitle: this.sessionTitle };
+  }
+  private pendingEvent(item: PendingItem): TaskNotification {
+    return { serverID: this.connected, directory: item.directory, sessionID: item.sessionID,
+      kind: pendingNotificationKind(item.kind), eventID: item.id, sessionTitle: item.sessionTitle };
+  }
+  private interactionEvent(sessionID: string, item: Interaction): TaskNotification {
+    const session = this.sessions.find((value: SessionItem) => value.id === sessionID);
+    return { serverID: this.connected, directory: session?.directory || this.directory, sessionID: sessionID,
+      kind: pendingNotificationKind(item.kind), eventID: item.id, sessionTitle: session?.title || this.sessionTitle };
+  }
+  // Ledger dedupe happens before any delivery, so a rejected permission or a
+  // failing platform publish can never make the same event retry every sync.
+  private dispatchReminder(event: TaskNotification): void {
+    if (!event.serverID || !event.sessionID) { return; }
+    if (!this.notificationLedger.offer(event)) { return; }
+    if (this.taskNotifier.accepts?.(event.kind) === false) { return; }
+    if (this.pane === 'chat' && this.conversationVisible && event.directory === this.directory &&
+      isQuietReminder(event, this.sessionID, this.foreground)) {
+      this.reminderQuiet = event.kind; this.reminderQuietSeq = this.reminderQuietSeq + 1; return;
+    }
+    try { this.taskNotifier.publish(event); } catch (_) { /* a reminder never breaks chat */ }
+  }
+  private seedReminderBaseline(outcome: string): void {
+    // A running assistant is not an already-completed historical task.
+    const completion = this.working ? undefined : this.completionEvent(outcome);
+    if (completion) { this.notificationLedger.markSeen(completion); }
+    this.interactions.forEach((item: Interaction) => {
+      if (item.state !== 'submitting') { this.notificationLedger.markSeen(this.interactionEvent(this.sessionID, item)); }
+    });
+    this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
+  }
+  private finishReminderSync(outcome: string, interactionsSynced: boolean): void {
+    if (this.readingHistory) { return; }
+    const suppress = this.notifyBaseline || this.syncSuppressNotify;
+    if (interactionsSynced) { this.notifyBaseline = false; this.syncSuppressNotify = false; }
+    if (suppress) { this.seedReminderBaseline(outcome); this.taskIdlePending = false; return; }
+    if (this.taskIdlePending && !this.working) {
+      const completion = this.completionEvent(outcome);
+      if (completion) { this.taskIdlePending = false; this.dispatchReminder(completion); }
+    }
+  }
+  // Only interactions that are still pending after a normal sync are announced.
+  // Baseline, older-history reads and post-reconnect catch-up stay quiet.
+  private detectInteractionNotifications(sessionID: string, items: Interaction[]): void {
+    if (this.notifyBaseline || this.syncSuppressNotify || this.readingHistory || !this.connected) { return; }
+    items.forEach((item: Interaction) => {
+      if (item.state === 'submitting') { return; }
+      this.dispatchReminder(this.interactionEvent(sessionID, item));
+    });
+  }
+  // The first successful global pending read seeds existing items. A read with
+  // failing scopes keeps the baseline so no half-read state can cause alerts.
+  private detectPendingNotifications(failed: boolean): void {
+    if (this.pendingBaseline) {
+      if (!failed) {
+        this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
+        this.pendingBaseline = false;
+      }
+      return;
+    }
+    if (this.pendingSuppressNotify) {
+      this.pendingItems.forEach((item: PendingItem) => { this.notificationLedger.markSeen(this.pendingEvent(item)); });
+      if (!failed) { this.pendingSuppressNotify = false; }
+      return;
+    }
+    this.pendingItems.forEach((item: PendingItem) => { if (!item.stale) { this.dispatchReminder(this.pendingEvent(item)); } });
+  }
+  // A disappearing running ID is only a candidate. Confirm the terminal outcome
+  // and message identity before deciding the category and deep-link directory.
+  private async detectSessionCompletions(ids: string[], api: Protocol, epoch: number): Promise<void> {
+    const next = new Set<string>(ids);
+    ids.slice(0, 500).forEach((id: string) => {
+      if (!this.runningTokens.has(id) && this.runningTokens.size < 500) {
+        this.runningTokenSeq++; this.runningTokens.set(id, this.runningTokenSeq);
+      }
+    });
+    const suppress = this.pendingBaseline || this.pendingSuppressNotify;
+    const previous = Array.from(this.runningTokens.keys());
+    const ended: string[] = [];
+    previous.forEach((id: string) => {
+      if (next.has(id)) { return; }
+      if (suppress || id === this.sessionID) { this.runningTokens.delete(id); }
+      else { ended.push(id); }
+    });
+    // Bound both retained candidates and concurrent terminal-state reads.
+    for (let i = 0; i < ended.length; i += 4) {
+      if (api !== this.api || epoch !== this.pendingEpoch) { return; }
+      await Promise.all(ended.slice(i, i + 4).map((id: string): Promise<void> => this.confirmSessionCompletion(api, epoch, id)));
+    }
+  }
+  private async confirmSessionCompletion(api: Protocol, epoch: number, id: string): Promise<void> {
+    const server = this.connected; const token = this.runningTokens.get(id);
+    try {
+      const detail = object(object(await api.request('/api/session/' + encodeURIComponent(id)))['data']);
+      const response = await api.messages(id);
+      if (api !== this.api || server !== this.connected || epoch !== this.pendingEpoch ||
+        token !== this.runningTokens.get(id) || this.runningSessions.indexOf(id) >= 0) { return; }
+      const last = api.parseMessages(response).filter((item: ChatMessage) => item.role === 'assistant').pop();
+      const kind = taskNotificationKind(string(detail['outcome']), last?.state || '');
+      if (!kind || (last?.state === 'streaming' && kind !== 'failed')) { return; }
+      const directory = string(object(detail['location'])['directory']);
+      if (!directory) { return; }
+      this.runningTokens.delete(id);
+      const event: TaskNotification = { serverID: server, directory: directory, sessionID: id, kind: kind,
+        eventID: completionEventID(last?.id || 'turn:' + String(token), id) };
+      if (this.pendingSuppressNotify || this.pendingBaseline) { this.notificationLedger.markSeen(event); }
+      else { this.dispatchReminder(event); }
+    } catch (_) { /* retain the bounded candidate for a later successful read */ }
+  }
+  // Deep link from a system notification. It reuses the normal safe navigation:
+  // the current draft is stashed first, a different server is connected through
+  // the existing flow, then the project and session are opened.
+  async openNotificationTarget(target: NotificationTarget): Promise<boolean> {
+    if (this.targetBusy || this.busy || !target || !target.serverID || !target.sessionID) { return false; }
+    this.targetBusy = true; this.error = '';
+    let api = this.api;
+    try {
+      const server = this.servers.find((item: ServerConfig) => item.id === target.serverID);
+      if (!server) { this.error = '提醒对应的服务器已从本机移除，请在连接页重新添加。'; return false; }
+      if (this.connected !== target.serverID) {
+        const connectedGeneration = await this.connect(server);
+        if (connectedGeneration === undefined || connectedGeneration !== this.generation ||
+          this.connected !== target.serverID || this.busy) { return false; }
+      }
+      api = this.api;
+      if (!api) { return false; }
+      const generation = this.generation;
+      // Resolve first: a removed session must not replace the current project.
+      const session = await api.session(target.sessionID);
+      if (api !== this.api || generation !== this.generation || this.connected !== target.serverID ||
+        !session || session.id !== target.sessionID) { return false; }
+      const directory = session.directory || target.directory || this.directory;
+      if (directory && directory !== this.directory) {
+        await this.selectProject(directory);
+        if (api !== this.api || this.generation !== generation + 1 || this.connected !== target.serverID ||
+          this.directory !== directory || this.sessionsError) { return false; }
+      }
+      await this.openSession(session);
+      return api === this.api && this.connected === target.serverID && this.sessionID === target.sessionID;
+    } catch (e) { if (api === this.api) { this.fail(e as Error); } return false; }
+    finally { this.targetBusy = false; }
   }
   async reconnect(): Promise<void> {
     const server = this.servers.find((s: ServerConfig) => s.id === this.connected);
@@ -400,6 +622,7 @@ export class AppStore {
     Array.from(this.unknownForks).forEach((key: string) => { if (key.startsWith(server + '\n')) { this.unknownForks.delete(key); } });
   }
   private resetSessionControl(): void {
+    this.modelBusy = false; this.modelUncertain = false;
     this.usageEpoch++; this.parentSessionID = ''; this.branchBoundary = ''; this.usage = emptyUsage(); this.usageError = ''; this.usageLoading = false;
     this.forkBusy = false; this.forkError = ''; this.forkUncertain = this.unknownForks.has(this.controlKey()); this.compactionBusy = false;
     this.compaction = this.compactRecords.get(this.controlKey()) || { id: '', state: '', error: '' };
@@ -411,14 +634,18 @@ export class AppStore {
     this.sessionMutationBusy = false; this.sessionPreferenceBusy = false; this.runningSessions = []; this.runningUnknown = false; this.showArchived = false;
     this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(undefined, '', async (): Promise<void> => {});
-    this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接';
+    this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接'; this.modelVariant = ''; this.modelPreferenceEpoch++; this.modelPreferences = emptyModelPreferences(); this.modelPreferencesBusy = false; this.modelPreferencesError = '';
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
     this.sessionID = ''; this.sessionTitle = ''; this.cursor = ''; this.tailLoaded = false; this.working = false; this.interrupting = false;
-    this.resetSessionControl(); this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false; return true;
+    this.resetSessionControl(); this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.modelID = ''; this.eventIDs = []; this.syncing = false; this.syncAgain = false; this.busy = false;
+    this.notificationLedger = new NotificationLedger(); this.notifyBaseline = false; this.syncSuppressNotify = false;
+    this.pendingBaseline = true; this.pendingSuppressNotify = false; this.taskIdlePending = false; this.runningTokens = new Map<string, number>();
+    this.cancelBackgroundReminderWindow();
+    this.reminderQuiet = ''; this.reminderQuietSeq = 0; return true;
   }
-  async connect(config: ServerConfig): Promise<void> {
-    if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true;
+  async connect(config: ServerConfig): Promise<number | undefined> {
+    if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true; let ownedGeneration = generation;
     try {
       const password = await this.storage.secret(config.id);
       if (generation !== this.generation) { return; }
@@ -428,8 +655,10 @@ export class AppStore {
       if (!version.startsWith('2.')) { throw new ApiError(0, '此版本仅支持 OpenCode V2。服务器版本：' + (version || '未知')); }
       const projects = await api.projects();
       const flags = await this.storage.sessionPreferences(config.id);
+      const modelPreferences = await this.storage.modelPreferences(config.id);
       if (generation !== this.generation) { return; }
-      this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects; this.sessionPreferences = flags;
+      this.api = api; this.providers.attach(api, '', async (): Promise<void> => { await this.refreshModels(); }); this.connected = config.id; this.version = version; this.projects = projects; this.sessionPreferences = flags; this.modelPreferences = modelPreferences;
+      this.pendingBaseline = true; this.syncSuppressNotify = false; this.pendingSuppressNotify = false; this.taskIdlePending = false;
       this.storage.rememberServer(config.id).catch((e: Error) => this.fail(e));
       this.status = '已连接'; this.pane = 'chat'; this.attempts = 0; this.openStream();
       this.pollTimer = setInterval(() => {
@@ -444,14 +673,21 @@ export class AppStore {
       if (generation !== this.generation) { return; }
       if (last.length > 0 && last[0]) {
         await this.selectProject(last[0]);
-        if (api !== this.api || this.sessionsError) { return; }
+        ownedGeneration++;
+        if (api !== this.api || ownedGeneration !== this.generation || this.sessionsError) { return; }
         if (last[1]) {
           const session = this.sessions.find((s: SessionItem) => s.id === last[1]) || await api.session(last[1]);
-          if (api === this.api && session.directory === this.directory) { await this.openSession(session); }
+          if (api !== this.api || ownedGeneration !== this.generation) { return; }
+          if (session.directory === this.directory) {
+            await this.openSession(session); ownedGeneration++;
+            if (api !== this.api || ownedGeneration !== this.generation || this.sessionID !== session.id) { return; }
+          }
         }
       }
+      return api === this.api && ownedGeneration === this.generation ? ownedGeneration : undefined;
     } catch (e) { if (generation === this.generation) { this.status = '连接失败'; this.fail(e as Error); } }
     finally { if (generation === this.generation) { this.busy = false; } }
+    return undefined;
   }
   private stopNetwork(): void {
     this.streamEpoch++;
@@ -462,8 +698,10 @@ export class AppStore {
     if (this.refreshTimer >= 0) { clearTimeout(this.refreshTimer); this.refreshTimer = -1; }
   }
   setActive(active: boolean): void {
-    this.active = active; this.providers.setActive(active);
+    if (active && !this.foreground) { this.suppressNotificationCatchUp(); }
+    this.active = active; this.providers.setActive(active); this.foreground = active;
     if (!active) {
+      this.suppressNotificationCatchUp();
       this.pendingEpoch++; this.pendingBusy = false;
       this.streamEpoch++; this.streamClose?.(); this.streamClose = undefined;
       if (this.workspaceTimer >= 0) { clearTimeout(this.workspaceTimer); this.workspaceTimer = -1; }
@@ -482,6 +720,7 @@ export class AppStore {
       if (error instanceof ApiError && (error.code === 401 || error.code === 403 || error.code === 495)) {
         this.networkBlocked = true; this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.error = error.message; this.stopNetwork(); return;
       }
+      this.suppressNotificationCatchUp();
       this.status = '重新连接中'; this.attempts++;
       if (this.retryTimer >= 0) { clearTimeout(this.retryTimer); }
       this.retryTimer = setTimeout(() => { this.retryTimer = -1; this.openStream(); },
@@ -494,11 +733,19 @@ export class AppStore {
     const type = string(event['type']); const id = string(event['id']);
     if (id && this.eventIDs.indexOf(id) >= 0) { return; }
     if (id) { this.eventIDs.push(id); if (this.eventIDs.length > 4096) { this.eventIDs.shift(); } }
-    if (type === 'server.connected') { this.status = '实时连接'; this.attempts = 0; this.queueSync(); return; }
+    if (type === 'server.connected') {
+      if (this.attempts > 0) { this.suppressNotificationCatchUp(); }
+      this.status = '实时连接'; this.attempts = 0; this.queueSync(); return;
+    }
     const location = string(object(event['location'])['directory']);
     const data = object(event['data']); const sessionID = string(data['sessionID'], string(object(data['form'])['sessionID']));
     if (sessionID && type === 'session.idle') { this.runningSessions = this.runningSessions.filter((id: string) => id !== sessionID); }
-    else if (sessionID && /^session\.(text|reasoning)\./.test(type) && this.runningSessions.indexOf(sessionID) < 0) { this.runningSessions = this.runningSessions.concat([sessionID]); }
+    else if (sessionID && /^session\.(text|reasoning)\./.test(type)) {
+      if (this.runningSessions.indexOf(sessionID) < 0) { this.runningSessions = this.runningSessions.concat([sessionID]); }
+      if (!this.runningTokens.has(sessionID) && this.runningTokens.size < 500) {
+        this.runningTokenSeq++; this.runningTokens.set(sessionID, this.runningTokenSeq);
+      }
+    }
     if (/^(form\.|permission\.|session\.(idle|created|updated|removed))/.test(type)) { this.queueWorkspace(); }
     if (location && location !== this.directory) { return; }
     if (!sessionID || sessionID !== this.sessionID) { return; }
@@ -510,10 +757,15 @@ export class AppStore {
       if (this.readingHistory && !this.messages.some((m: ChatMessage) => m.id === messageID)) { this.newerAvailable = true; }
       else { this.messages = applyTextDelta(this.messages, messageID, ordinal, partType,
         string(data[ended ? 'text' : 'delta']), ended).slice(-300); }
-      this.working = true;
+      this.working = true; this.taskIdlePending = false;
       if (ended) { this.queueSync(); }
     } else {
-      if (type === 'session.idle') { this.working = false; }
+      if (type === 'session.idle') {
+        const wasWorking = this.working; this.working = false;
+        // The task may be finished; a following sync decides completed/failed
+        // from the newest assistant message before anything is displayed.
+        if (wasWorking) { this.taskIdlePending = true; }
+      }
       if (type.indexOf('retry') >= 0) { this.working = true; }
       this.queueSync();
     }
@@ -530,7 +782,7 @@ export class AppStore {
     this.clearTimeline(); this.generation++; this.streamClose?.(); const generation = this.generation; const api = this.api;
     this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(api, directory.trim(), async (): Promise<void> => { await this.refreshModels(); });
-    this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.directory = directory.trim(); this.sessionID = ''; this.resetSessionControl(); this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
+    this.pendingSend = undefined; this.draft = ''; this.attachments = []; this.directory = directory.trim(); this.sessionID = ''; this.modelID = ''; this.modelVariant = ''; this.resetSessionControl(); this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = [];
     this.fileContent = ''; this.filePath = ''; this.files = []; this.fileTruncated = false; this.cursor = ''; this.tailLoaded = false; this.readingHistory = false; this.newerAvailable = false; this.transcriptEpoch++; this.error = ''; this.busy = true; this.syncing = false;
     try {
       await api.request('/api/location?' + api.scope(this.directory));
@@ -569,7 +821,10 @@ export class AppStore {
     this.cancelExport(); this.agentEpoch++; this.agentID = session.agent || ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
-    this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model; this.resetSessionControl(); this.parentSessionID = session.parentID || ''; this.branchBoundary = session.forkType === 'before' ? '所选消息之前' : session.forkType === 'through' ? '创建分叉时的最后一条消息' : '';
+    this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model; this.modelVariant = session.variant || ''; this.resetSessionControl(); this.parentSessionID = session.parentID || ''; this.branchBoundary = session.forkType === 'before' ? '所选消息之前' : session.forkType === 'through' ? '创建分叉时的最后一条消息' : '';
+    // Existing history and pending items are seeded on the first sync; they are
+    // never announced as new while the user is opening the conversation.
+    this.notifyBaseline = true; this.taskIdlePending = false;
     this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
     const saved = this.conversationMemory.read(this.connected, this.directory, session.id);
     this.draft = saved.text; this.attachments = saved.files || []; this.pendingSend = saved.pending; this.working = false; this.interrupting = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); this.queueWorkspace();
@@ -608,8 +863,8 @@ export class AppStore {
         if (generation !== this.generation) { return; }
         if (confirmed && this.pendingSend?.id === pending.id) { this.pendingSend = undefined; this.draft = ''; this.attachments = []; if (this.error.indexOf('发送结果待核对') >= 0) { this.error = ''; } this.clearSavedDraft(); }
       }
-      await this.syncInteractions(api, id, 'form', generation);
-      await this.syncInteractions(api, id, 'permission', generation);
+      const formsSynced = await this.syncInteractions(api, id, 'form', generation);
+      const permissionsSynced = await this.syncInteractions(api, id, 'permission', generation);
       const active = object(object(await api.request('/api/session/active'))['data']);
       const usageEpoch = ++this.usageEpoch; const detail = object(object(await api.request('/api/session/' + encodeURIComponent(id)))['data']);
       const inbox = rows(await api.request('/api/session/' + encodeURIComponent(id) + '/inbox'));
@@ -620,16 +875,23 @@ export class AppStore {
         const title = string(detail['title'], this.sessionTitle);
         if (title !== this.sessionTitle) {
           this.sessionTitle = title;
-          this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model, agent: item.agent, parentID: item.parentID, forkType: item.forkType, forkBefore: item.forkBefore, updated: item.updated, archived: item.archived }));
+          this.sessions = this.sessions.map((item: SessionItem): SessionItem => ({ id: item.id, title: item.id === id ? title : item.title, directory: item.directory, status: item.status, model: item.model, variant: item.variant, agent: item.agent, parentID: item.parentID, forkType: item.forkType, forkBefore: item.forkBefore, updated: item.updated, archived: item.archived }));
         }
+        const wasWorking = this.working; const wasListedRunning = this.runningSessions.indexOf(id) >= 0;
         if (active[id] !== undefined || inbox.length > 0) { this.working = true; }
-        else if (detail['outcome']) { this.working = false; }
+        else if (detail['outcome']) { this.working = false; if (wasWorking || wasListedRunning) { this.taskIdlePending = true; } }
         const model = object(detail['model']);
         if (selection === this.selectionEpoch) {
           this.agentID = string(detail['agent']);
+          this.modelVariant = string(model['variant']);
+          if (model['id']) {
+            if (this.modelUncertain && this.error === '模型设置结果待核对，请同步后再继续') { this.error = ''; }
+            this.modelUncertain = false;
+          }
           if (model['id']) { this.modelID = string(model['providerID']) + '/' + string(model['id']); }
           else { this.modelID = this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; }
         }
+        this.finishReminderSync(string(detail['outcome']), formsSynced && permissionsSynced);
       }
     } catch (e) {
       if (generation === this.generation) {
@@ -644,11 +906,11 @@ export class AppStore {
       }
     }
   }
-  private async syncInteractions(api: Protocol, id: string, kind: string, generation: number): Promise<void> {
+  private async syncInteractions(api: Protocol, id: string, kind: string, generation: number): Promise<boolean> {
     const epoch = kind === 'permission' ? ++this.permissionEpoch : 0;
     try {
       const incoming = await api.interactions(id, kind, this.directory);
-      if (generation !== this.generation || (kind === 'permission' && epoch !== this.permissionEpoch)) { return; }
+      if (generation !== this.generation || (kind === 'permission' && epoch !== this.permissionEpoch)) { return false; }
       const savedForms = this.conversationMemory.read(this.connected, this.directory, id).forms || [];
       const next = incoming.map((item: Interaction): Interaction => {
         const old = this.interactions.find((p: Interaction) => p.id === item.id);
@@ -661,11 +923,14 @@ export class AppStore {
       const combined = this.interactions.filter((p: Interaction) => p.kind !== kind).concat(next);
       if (JSON.stringify(this.interactions) !== JSON.stringify(combined)) { this.interactions = combined; }
       if (kind === 'permission') { this.permissionError = ''; }
+      this.detectInteractionNotifications(id, next);
+      return true;
     } catch (e) {
       if (generation === this.generation && (kind !== 'permission' || epoch === this.permissionEpoch)) {
         if (kind === 'permission') { this.permissionError = '审批列表读取失败，已保留上次结果。请重新读取后再批准；仍可拒绝已显示的请求。'; }
         else { this.fail(e as Error); }
       }
+      return false;
     }
   }
   async retryPermissions(): Promise<void> {
@@ -687,6 +952,8 @@ export class AppStore {
   }
   async latest(): Promise<void> {
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
+    // Returning from older history is a catch-up view, not a new event.
+    this.notifyBaseline = true; this.taskIdlePending = false;
     this.messages = []; this.cursor = ''; this.tailLoaded = false; this.syncAgain = true;
     await this.sync();
   }
@@ -703,7 +970,7 @@ export class AppStore {
     } catch (_) { return { id: item.id, name: item.name, mime: item.mime, size: item.size, data: '', error: '读取失败，请关闭后重试' }; }
   }
   async send(): Promise<void> {
-    if (!this.api || !this.sessionID || this.busy || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy || ['queued', 'running', 'submitting'].indexOf(this.compaction.state) >= 0 || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
+    if (!this.api || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy || ['queued', 'running', 'submitting'].indexOf(this.compaction.state) >= 0 || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
     const pending: PendingPrompt = this.pendingSend || {
       id: 'msg_' + Date.now().toString(36) + Math.random().toString(36).slice(2),
       sessionID: this.sessionID, text: this.draft.trim(), files: this.attachments.map((a: Attachment): Attachment => ({ id: a.id, name: a.name, mime: a.mime, data: a.data, size: a.size }))
@@ -849,7 +1116,7 @@ export class AppStore {
   private async readAgentState(api: Protocol, id: string, generation: number): Promise<void> {
     const session = await api.session(id);
     if (generation !== this.generation || id !== this.sessionID) { return; }
-    this.selectionEpoch++; this.agentID = session.agent || ''; this.modelID = session.model || this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; this.agentUncertain = false;
+    this.selectionEpoch++; this.modelVariant = session.variant || ''; this.agentID = session.agent || ''; this.modelID = session.model || this.agents.find((a: AgentItem) => a.id === this.agentID)?.model || ''; this.agentUncertain = false;
   }
   async refreshAgentState(): Promise<void> {
     if (!this.api || this.agentBusy || this.agentLoading) { return; } const api = this.api; const id = this.sessionID; const generation = this.generation;
@@ -861,7 +1128,7 @@ export class AppStore {
     finally { if (generation === this.generation) { this.agentLoading = false; } }
   }
   async chooseAgent(id: string): Promise<boolean> {
-    if (!this.api || !this.sessionID || this.busy || this.agentBusy || this.agentLoading || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
+    if (!this.api || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentLoading || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
     if (id === this.agentID) { return true; }
     if (!this.agents.some((a: AgentItem) => a.id === id)) { this.agentError = '请从当前服务器的可用 Agent 中选择'; return false; }
     if (this.working || this.pendingSend || this.interactions.length || this.permissionError) { this.agentError = '请先结束当前任务并处理问题或审批，再切换 Agent'; return false; }
@@ -903,23 +1170,67 @@ export class AppStore {
       return undefined;
     } finally { if (generation === this.generation && epoch === this.exportEpoch) { this.exporting = false; this.exportJob = undefined; } }
   }
-  async chooseModel(id: string): Promise<void> {
-    if (!this.api || !this.sessionID || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy) { return; }
-    const slash = id.indexOf('/'); const generation = this.generation; this.selectionEpoch++; this.error = '';
+  private async persistModelPreferences(next: ModelPreferences): Promise<boolean> {
+    if (!this.connected || this.modelPreferencesBusy) { return false; }
+    const server = this.connected; const epoch = ++this.modelPreferenceEpoch;
+    this.modelPreferencesBusy = true; this.modelPreferencesError = '';
     try {
-      await this.api.request(this.sessionPath() + '/model', http.RequestMethod.POST,
-        { model: { id: id.slice(slash + 1), providerID: id.slice(0, slash) } } as ModelRequest);
-      if (generation === this.generation) {
-        this.selectionEpoch++; this.modelID = id;
-        if (this.connected) {
-          this.servers = this.servers.map((s: ServerConfig): ServerConfig => ({ id: s.id, name: s.name, url: s.url,
-            username: s.username, allowHttp: s.allowHttp, useDedicatedTrust: s.useDedicatedTrust,
-            preferredModel: s.id === this.connected ? id : s.preferredModel }));
-          await this.storage.saveServers(this.servers);
-        }
-        await this.sync();
+      await this.storage.saveModelPreferences(server, next);
+      if (server !== this.connected || epoch !== this.modelPreferenceEpoch) { return false; }
+      this.modelPreferences = next; return true;
+    } catch (_) { if (server === this.connected && epoch === this.modelPreferenceEpoch) { this.modelPreferencesError = '模型偏好未保存，请重试'; } return false; }
+    finally { if (server === this.connected && epoch === this.modelPreferenceEpoch) { this.modelPreferencesBusy = false; } }
+  }
+  async enableModel(id: string, enabled: boolean): Promise<boolean> {
+    if (this.modelBusy || this.modelPreferencesBusy) { return false; }
+    if ((this.modelPreferences.enabled.indexOf(id) >= 0) === enabled) { return true; }
+    if (enabled && !this.models.some((model: ModelItem) => model.id === id && model.available !== false)) { return false; }
+    return this.persistModelPreferences(setModelEnabled(this.modelPreferences, id, enabled));
+  }
+  async favoriteModel(id: string, favorite: boolean): Promise<boolean> {
+    if (this.modelBusy || this.modelPreferencesBusy) { return false; }
+    if ((this.modelPreferences.favorites.indexOf(id) >= 0) === favorite) { return true; }
+    if (favorite && !this.models.some((model: ModelItem) => model.id === id && model.available !== false)) { return false; }
+    return this.persistModelPreferences(setModelFavorite(this.modelPreferences, id, favorite));
+  }
+  async chooseModel(id: string, variant: string = ''): Promise<boolean> {
+    if (!this.api || !this.sessionID || this.modelBusy || this.modelPreferencesBusy || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
+    if (this.modelUncertain) { this.error = '模型设置结果待核对，请先同步再选择'; return false; }
+    if (this.pendingSend) { this.error = '请先核对上一次发送结果，再切换模型或思考程度'; return false; }
+    const model = enabledModels(this.models, this.modelPreferences).find((item: ModelItem) => item.id === id);
+    if (!model) { this.error = '请先在模型与接入中启用这个模型'; return false; }
+    if (variant && (model.variants || []).indexOf(variant) < 0) { this.error = '服务器没有提供这个思考档位，请刷新模型目录'; return false; }
+    if (id === this.modelID && variant === this.modelVariant) { return true; }
+    const slash = id.indexOf('/'); const generation = this.generation; const api = this.api;
+    this.selectionEpoch++; this.error = ''; this.modelBusy = true; let submitted = false;
+    try {
+      const reference: ModelRef = { id: id.slice(slash + 1), providerID: id.slice(0, slash) };
+      if (variant) { reference.variant = variant; }
+      submitted = true;
+      await api.request(this.sessionPath() + '/model', http.RequestMethod.POST, { model: reference } as ModelRequest);
+      if (generation !== this.generation) { return false; }
+      const detail = object(object(await api.request(this.sessionPath()))['data']); const confirmed = object(detail['model']);
+      if (generation !== this.generation) { return false; }
+      if (!confirmed['id']) { throw new Error('模型设置结果待核对，请同步后重试'); }
+      this.selectionEpoch++; this.modelID = string(confirmed['providerID']) + '/' + string(confirmed['id']); this.modelVariant = string(confirmed['variant']); this.modelUncertain = false;
+      if (this.modelID !== id || this.modelVariant !== variant) { this.error = '服务器未确认所选模型或思考程度，请同步后重试'; return false; }
+      if (this.connected) {
+        this.servers = this.servers.map((s: ServerConfig): ServerConfig => ({ id: s.id, name: s.name, url: s.url,
+          username: s.username, allowHttp: s.allowHttp, useDedicatedTrust: s.useDedicatedTrust,
+          preferredModel: s.id === this.connected ? id : s.preferredModel }));
+        await this.storage.saveServers(this.servers);
       }
-    } catch (e) { if (generation === this.generation) { this.fail(e as Error); } }
+      if (generation !== this.generation) { return false; }
+      await this.sync();
+      if (generation !== this.generation || this.error) { return false; }
+      if (this.modelID !== id || this.modelVariant !== variant) { this.error = '服务器未确认所选模型或思考程度，请同步后重试'; return false; }
+      await this.persistModelPreferences(rememberModel(this.modelPreferences, id));
+      return generation === this.generation;
+    } catch (e) { if (generation === this.generation) {
+      this.modelUncertain = submitted && !(e instanceof ApiError && [400, 401, 403, 404, 405, 422, 495].indexOf(e.code) >= 0);
+      this.fail(e as Error); if (this.modelUncertain) { this.error = '模型设置结果待核对，请同步后再继续'; }
+    } return false; }
+    finally { if (generation === this.generation) { this.modelBusy = false; } }
   }
   async openSettings(): Promise<void> { this.pane = 'settings'; await this.providers.load(); }
   async refreshModels(): Promise<void> {

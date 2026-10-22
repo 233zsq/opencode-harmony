@@ -60,11 +60,13 @@ function load(path,key){const exports={};const code=ts.transpileModule(readFileS
  vm.runInNewContext(code,{exports,require:name=>{assert.ok(modules.has(name),name);return modules.get(name);},Observed:value=>value,Error,Map,Set,Date,Math,JSON,setTimeout,clearTimeout,setInterval,clearInterval});modules.set(key,exports);return exports;}
 load('entry/src/main/ets/domain/Attachments.ts','../domain/Attachments');load('entry/src/main/ets/domain/Core.ts','../domain/Core');
 modules.set('./Core', modules.get('../domain/Core'));
+load('entry/src/main/ets/domain/ModelSelection.ts', '../domain/ModelSelection');
 load('entry/src/main/ets/domain/Connections.ts', '../domain/Connections');
 load('entry/src/main/ets/domain/SessionUsage.ts', '../domain/SessionUsage');load('entry/src/main/ets/data/DedicatedTrust.ets','./DedicatedTrust');
 load('entry/src/main/ets/domain/Agents.ts', '../domain/Agents');
 load('entry/src/main/ets/domain/TranscriptExport.ts', '../domain/TranscriptExport');
 const {Protocol}=load('entry/src/main/ets/data/Protocol.ets','../data/Protocol');load('entry/src/main/ets/presentation/ProviderStore.ets','./ProviderStore');
+load('entry/src/main/ets/domain/Notifications.ts','../domain/Notifications');
 const {AppStore}=load('entry/src/main/ets/presentation/AppStore.ets','store');const api=new Protocol({url,username:'u',allowHttp:true},'test-only');
 const store=new AppStore();store.api=api;store.connected='loopback';store.directory='/repo';store.projects=await api.projects();
 let count=0;async function test(name,run){await run();count++;console.log('PASS '+name);}

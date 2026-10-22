@@ -1,5 +1,6 @@
 // Run against tests/fake-server.mjs over an HDC reverse port; never invokes an Agent.
 import assert from 'node:assert/strict';
+import {find as nativeFind} from './native-driver.mjs';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -28,6 +29,7 @@ async function click(q){
   }
   throw new Error('Native navigation did not finish returning to chat');
  }
+ if(q.startsWith('menu-')||q==='appearance-menu'){await clickNode(await reveal(aliases[q]||q));return;}
  await clickNode(await waitFor(q));
 }
 async function clickNode(n){assert.ok(n,'UI control missing');const b=bounds(n);cmd('shell','uitest uiInput click '+Math.round((b[0]+b[2])/2)+' '+Math.round((b[1]+b[3])/2));await pause(300);}
@@ -36,7 +38,7 @@ async function reveal(q){
   const all=layout(),root=bounds(all[0]),h=root[3],w=root[2],n=all.find(n=>n.id===q||n.text===q),b=n&&bounds(n);
   const list=all.find(n=>n.id==='conversation-list'&&n.visible!=='false');const chatControl=/^(choice-|field-|interaction-|approval-|reasoning-|tool-row-)/.test(q)&&list;
   const scroll=all.find(n=>n.type==='Scroll'&&n.visible!=='false');
-  const viewport=n?.viewportBounds?bounds({bounds:n.viewportBounds}):chatControl?bounds(list):scroll?bounds(scroll):[0,230,w,h-50];
+  const viewport=n?.viewportBounds?bounds({bounds:n.viewportBounds}):chatControl?bounds(list):n?[0,230,w,h-50]:scroll?bounds(scroll):[0,230,w,h-50];
   const tall=b&&b[3]-b[1]>=viewport[3]-viewport[1]-32;
   if(n&&n.visible!=='false'&&b[1]>=viewport[1]+(tall?0:8)&&b[3]<=viewport[3]+1&&b[3]-b[1]>(q.startsWith('choice-')?35:8))return n;
   const up=n?b[1]<=viewport[1]+30:i>=3;
@@ -45,7 +47,7 @@ async function reveal(q){
  }
  throw new Error('Control not visible: '+q);
 }
-async function input(q,text){assert.ok(!text.includes("'"));await reveal(q);await click(q);await pause(900);cmd('shell','uitest uiInput keyEvent 2072 2017');await pause(150);cmd('shell','uitest uiInput keyEvent 2055');await pause(150);cmd('shell',"uitest uiInput text '"+text+"'");await pause(300);if(layout().some(n=>n.bundleName==='com.huawei.hmos.inputmethod')){cmd('shell','uitest uiInput keyEvent Back');await pause(300);}}
+async function input(q,text){assert.ok(!text.includes("'"));await reveal(q);await click(q);await pause(900);cmd('shell','uitest uiInput keyEvent 2072 2017');await pause(150);cmd('shell','uitest uiInput keyEvent 2055');await pause(150);cmd('shell',"uitest uiInput text '"+text+"'");await pause(300);if(nativeFind('SkinBgContent')){cmd('shell','uitest uiInput keyEvent Back');await pause(300);}}
 async function shot(name){cmd('shell','snapshot_display -f /data/local/tmp/opencode-ui.jpeg');cmd('file','recv','/data/local/tmp/opencode-ui.jpeg',resolve('.test/'+(process.env.OPENCODE_UI_TAG||'')+name+'.jpeg'));}
 const state=async()=>await(await fetch(endpoint+'/__test/state')).json();
 const control=async path=>{const r=await fetch(endpoint+'/__test/'+path,{method:'POST'});assert.equal(r.status,200);return await r.json();};
@@ -53,7 +55,7 @@ const mode=process.argv[2];
 if(mode==='home'){
  assert.ok(find('chat-input'));assert.ok(find('open-sidebar'));assert.ok(!find('server-url'));await shot('ui-home');console.log('PASS chat is the home screen; connection form is separate.');
 }else if(mode==='sidebar'){
- if(!find('session-search'))await click('open-sidebar');await waitFor('session-search');assert.ok(find('session-search'));assert.ok(find('nav-connections'));assert.ok(find('nav-review'));await shot('ui-sidebar');await click('close-sidebar');await click('open-sidebar');await waitFor('session-search');cmd('shell','uitest uiInput keyEvent Back');await pause(650);assert.ok(find('open-menu'));assert.ok(!find('session-search'));console.log('PASS native sidebar history, management, close button and system-back dismissal.');
+ if(!nativeFind('sidebar-dismiss'))await click('open-sidebar');await waitFor('history-search');assert.ok(find('nav-connections'));assert.ok(!nativeFind('nav-review'));assert.ok(!nativeFind('close-sidebar'));await shot('ui-sidebar');const outside=bounds(nativeFind('sidebar-dismiss'));cmd('shell','uitest uiInput click '+Math.round((outside[0]+outside[2])/2)+' '+Math.round((outside[1]+outside[3])/2));await pause(650);assert.ok(!nativeFind('sidebar-dismiss'));await click('open-sidebar');await waitFor('history-search');cmd('shell','uitest uiInput keyEvent Back');await pause(650);assert.ok(find('open-menu'));assert.ok(!nativeFind('sidebar-dismiss'));console.log('PASS native history-only sidebar, outside dismissal and system-back dismissal.');
 }else if(mode==='thinking'){
  const test=await control('ui-phase?phase=thinking');writeFileSync('.test/ui-case.json',JSON.stringify(test));await pause(1800);assert.ok(find('reasoning-content-'+test.id));await shot('ui-thinking');
  await control('ui-phase?phase=answer');await pause(1800);assert.ok(!find('reasoning-content-'+test.id));assert.ok(find('reasoning-toggle-'+test.id));assert.ok(!find('tool-details'));assert.ok(find('tool-row-'+test.toolID));await shot('ui-answer');console.log('PASS thinking expands live, collapses at reasoning end, tools stay compact.');
@@ -61,9 +63,9 @@ if(mode==='home'){
  const test=JSON.parse(readFileSync('.test/ui-case.json','utf8'));
  await click('reasoning-toggle-'+test.id);assert.ok(find('reasoning-content-'+test.id));await click('reasoning-toggle-'+test.id);assert.ok(!find('reasoning-content-'+test.id));
  await click('tool-row-'+test.toolID);assert.ok(find('tool-request'));assert.ok(find('tool-response'));await shot('ui-tool-running');
- await control('ui-phase?phase=tool-done');await pause(1800);assert.ok((find('tool-response').text||'').includes('verified sample only'));await shot('ui-tool-completed');cmd('shell','uitest uiInput keyEvent Back');await pause(400);console.log('PASS independent reasoning toggle and live tool sheet updates.');
+ await control('ui-phase?phase=tool-done');await pause(1800);assert.ok((find('tool-response').text||'').includes('verified sample only'));await shot('ui-tool-completed');cmd('shell','uitest uiInput keyEvent Back');await pause(400);console.log('PASS independent reasoning toggle and live tool page updates.');
 }else if(mode==='menu'){
- await click('open-menu');await click('menu-connections');await pause(700);await reveal('server-url');assert.ok(find('server-url'));assert.ok(!find('open-sidebar'),'Sidebar control covers destination back button');await shot('ui-connections');await click('native-back');await pause(1500);assert.ok(find('chat-input'));console.log('PASS management navigation returns with the native back button unobstructed.');
+ await click('open-menu');await click('menu-connections');await pause(700);await waitFor('add-server');assert.ok(find('add-server'));assert.ok(!find('open-sidebar'),'Sidebar control covers destination back button');await shot('ui-connections');await click('native-back');await pause(1500);assert.ok(find('chat-input'));console.log('PASS management navigation returns with the native back button unobstructed.');
 }else if(mode==='question'){
  if(!(await state()).forms.length){await input('chat-input','test question');await click('send-button');await pause(8500);}
  for(const id of ['choice-approach-minimal','choice-areas-chat','choice-areas-diff']){const item=await reveal(id);if(item.checked!=='true')await clickNode(item);}
@@ -80,11 +82,11 @@ if(mode==='home'){
  await reveal('turn-turn_b');await click('turn-turn_b');await pause(700);await reveal('+TASK_B_ONLY');assert.ok(find('+TASK_B_ONLY'));assert.ok(!find('+TASK_A_ONLY'));await click('back-chat');console.log('PASS native task grouping and same-file Diff refresh in both directions.');
 }else if(mode==='providers-live'){
  if(find('back-chat'))await click('back-chat');await click('open-menu');await click('menu-settings');await pause(1500);await click('提供商');await click('quick-opencode');await reveal('provider-key');assert.ok(find('provider-key'));
- await reveal('模型目录');await click('模型目录');await input('model-catalog-search','mimo');assert.ok(layout().some(n=>(n.text||'').includes('opencode/mimo-v2.6-flash-free')));await shot('ui-real-mimo-catalog');
+ await click('native-back');await waitFor('provider-segments');await reveal('模型目录');await click('模型目录');await input('model-catalog-search','mimo');assert.ok(layout().some(n=>(n.text||'').includes('opencode/mimo-v2.6-flash-free')));await shot('ui-real-mimo-catalog');
  await reveal('兼容渠道');await click('兼容渠道');await click('custom-new');await input('custom-id','mobile-ui-validation');await input('custom-name','Local format check');await input('custom-url','https://api.example.com/v1/chat/completions');await input('custom-models','test');await reveal('custom-save');await click('custom-save');await reveal('兼容渠道');assert.ok(layout().some(n=>(n.text||'').includes('Base URL')));await shot('ui-real-custom-validation');await click('custom-new');await click('back-chat');console.log('PASS API24 real provider catalog, MiMo search, key form and local channel validation; no credential writes.');
 }else if(mode==='providers'){
  await click('open-menu');await click('menu-settings');await pause(1000);assert.ok(find('模型目录'));await click('提供商');await click('quick-deepseek');await reveal('provider-key');assert.ok(find('provider-key'));await shot('ui-provider-key');
- await reveal('模型目录');await click('模型目录');await pause(400);assert.ok(find('model-catalog-search'));assert.ok(layout().some(n=>n.text==='fixture/fixture-coder'));await shot('ui-model-catalog');
+ await click('native-back');await waitFor('provider-segments');await reveal('模型目录');await click('模型目录');await pause(400);assert.ok(find('model-catalog-search'));assert.ok(layout().some(n=>n.text==='fixture/fixture-coder'));await shot('ui-model-catalog');
  await reveal('兼容渠道');await click('兼容渠道');await input('custom-id','mobile-test');await input('custom-name','Native UI');await input('custom-url','https://api.example.com/v1/chat/completions');await input('custom-models','one');await reveal('custom-save');await click('custom-save');await reveal('兼容渠道');assert.ok(layout().some(n=>(n.text||'').includes('Base URL')));await shot('ui-provider-validation');
  await click('custom-new');assert.equal(find('custom-id').text,'');await click('back-chat');console.log('PASS native provider tabs, key form, model catalog and local validation.');
 }else if(mode==='native-new'){

@@ -1,5 +1,7 @@
 // Semantic resources follow the system light/dark mode on API24 and newer.
 export class HarmonyColors {
+  static readonly hero_glow: Resource = $r('app.color.ui_hero_glow');
+  static readonly hero_edge: Resource = $r('app.color.ui_hero_edge');
   static readonly on_accent: Resource = $r('app.color.ui_on_accent');
   static readonly page: Resource = $r('app.color.ui_page');
   static readonly surface: Resource = $r('app.color.ui_surface');
@@ -22,4 +24,16 @@ export class HarmonyColors {
   static readonly removed_text: Resource = $r('app.color.ui_removed_text');
   static readonly code_bg: Resource = $r('app.color.ui_code_bg');
   static readonly code_text: Resource = $r('app.color.ui_code_text');
+  static readonly btn: Resource = $r('app.color.ui_btn');
+  static readonly btn_text: Resource = $r('app.color.ui_btn_text');
+  static readonly glass_fill: Resource = $r('app.color.ui_glass_fill');
+  static readonly glass_strong: Resource = $r('app.color.ui_glass_strong');
+  static readonly glass_stroke: Resource = $r('app.color.ui_glass_stroke');
+  static readonly glass_highlight: Resource = $r('app.color.ui_glass_highlight');
+  static readonly glass_shadow: Resource = $r('app.color.ui_glass_shadow');
+  static readonly sheet_tint: Resource = $r('app.color.ui_sheet_tint');
+  static readonly sheet_scrim: Resource = $r('app.color.ui_sheet_scrim');
+  static readonly success: Resource = $r('app.color.ui_success');
+  static readonly success_bg: Resource = $r('app.color.ui_success_bg');
+  static readonly chip: Resource = $r('app.color.ui_chip');
 }

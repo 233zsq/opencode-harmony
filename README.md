@@ -7,6 +7,7 @@
 ## 当前实现
 
 - 对话首页、原生导航与系统菜单、手机抽屉与Pad宽屏侧栏；历史搜索、独立管理页面及最近服务器恢复。
+- 鸿蒙原生视觉与比例：中性灰白/深灰主题、蓝色选中态、较窄历史侧栏、分层字号与分组列表；原创玻璃代码图标用于启动和空态。模型高频选择采用顶部锚定浮层，“全部模型”和思考程度在浮层内展开，其余复杂流程使用原生页面；见 [HARMONY-UI-REFINEMENT.md](docs/HARMONY-UI-REFINEMENT.md)。
 - API26 原生沉浸光感、系统分段控件及跟随系统/浅色/深色外观；最低兼容 API24。
 - 多服务器配置与编辑、密码保留/更新/清除、重复地址检查及移除确认；HTTP Basic 认证、连接与错误状态。
 - 项目/目录、创建和恢复会话、历史分页；会话改名、本机置顶/归档及服务器名称搜索。
@@ -17,17 +18,21 @@
 - 会话 Agent 搜索与切换、说明及默认模型展示；切换结果读回确认与重复提交保护。
 - 消息分叉、编辑重发草稿、可选原附件与父会话返回；上下文上限、服务端 Token/费用及手动压缩状态核对。
 - 完整历史导出 Markdown/文本、可选工具详情与原生文件保存；长会话进度、取消及失败处理。
-- 动态模型目录、聊天页模型搜索与分批选择、渠道/ID和图片/PDF能力展示，以及每个服务器的模型偏好。
+- 动态模型目录；每台服务器独立管理启用与喜爱模型，最近两个非喜爱模型固定显示在选择栏底部；浮层内搜索、分批选择及服务器声明的思考档位。详见 [MODEL-PREFERENCES.md](docs/MODEL-PREFERENCES.md)。
 - 手机端提供商搜索、API Key、OAuth 设备码/授权码和多账号管理；受限自定义兼容渠道。
 - 只读文件浏览、工作区 Git Diff，以及按任务快照查看会话修改。
 - 退避重连、回前台同步、消息 ID 去重与迟到响应隔离；发送结果核对、草稿及 Question 答案在本次运行中暂存。
 - 跨项目待办中心、侧栏运行/待回答/待审批状态；消息/代码复制及原生多行输入。
+- 任务提醒：完成/失败/待回答与待审批可分别开关，仅在用户主动开启时申请系统通知权限；通知只显示通用状态，点击回到对应会话并保留草稿；当前正在查看的会话只用安静应用内提示。前台、短时间后台与进程退出边界见 [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)。
+- 手机输入与适配：真实软键盘避让、中文候选栏与多行输入、切换会话/打开面板时收起键盘并保留草稿、系统大字体（跟随系统，上限 1.75）、窄屏省略与图标按钮无障碍热区；边界见 [MOBILE-USABILITY.md](docs/MOBILE-USABILITY.md)，通知审查与修复见 [MOBILE-REVIEW.md](docs/MOBILE-REVIEW.md)。
 
-已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 214 项本机回归、4 项合成负载检查及完整构建，最新交互按使用者要求只在 API26 模拟器验收；真机留待之后。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
+已在 API26 模拟器和 API24 Pad 构建、安装并运行。当前版本已完成 289 项 Node 回归、2 项 Python 域校验及完整构建；模型启用/喜爱/历史、思考档位和浅深色浮层在 API26 模拟器使用本机测试服务验收。本轮真机、横屏/分屏和 API24 设备留待之后，既有 4 项 Node 合成负载结果不等同于设备性能。真实免费 MiMo 已正确读取合成图片和文本附件。连接编辑、分叉与长会话管理见 [CONNECTIONS-AND-SESSIONS.md](docs/CONNECTIONS-AND-SESSIONS.md)。Agent 切换、会话导出与验证边界见 [AGENTS-AND-EXPORT.md](docs/AGENTS-AND-EXPORT.md)。提供商表单修复、模型搜索及后续功能优先级见 [MODEL-WORKFLOW.md](docs/MODEL-WORKFLOW.md)。附件交互证据、预览边界与复现步骤见 [CONTENT-AND-ACCEPTANCE.md](docs/CONTENT-AND-ACCEPTANCE.md)，既有设备与服务器验证见 [PROGRESS.md](docs/PROGRESS.md)，实施方案见 [PLAN.md](docs/PLAN.md)。
 
-独立9443 HTTPS入口已可使用。正式域名等待备案；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
+正式域名已通过标准443 HTTPS入口提供服务，独立9443保留兼容；DeepSeek等需在手机设置中输入自己的有效凭据，保存成功与实际模型调用分别核验。免费MiMo使用内置OpenCode提供商；其免费入口拒绝自定义兼容接入。提供商入口和配置边界见 [PROVIDERS.md](docs/PROVIDERS.md)。
 
-界面位置与交互规则、设备验证及聊天间距/输入区修复见 [UI.md](docs/UI.md)。原生控件、API26材质和兼容边界见 [NATIVE-UI.md](docs/NATIVE-UI.md)。聊天、会话与待办的新功能和最终交互验收清单见 [WORKSPACE-FEATURES.md](docs/WORKSPACE-FEATURES.md)。
+界面位置与交互规则、设备验证及聊天间距/输入区修复见 [UI.md](docs/UI.md)。原生控件、API26材质和兼容边界见 [NATIVE-UI.md](docs/NATIVE-UI.md)。聊天、会话与待办的新功能和最终交互验收清单见 [WORKSPACE-FEATURES.md](docs/WORKSPACE-FEATURES.md)。任务提醒能力边界见 [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)，移动端输入/大字号/无障碍见 [MOBILE-USABILITY.md](docs/MOBILE-USABILITY.md)。
+
+最新侧栏与材质调整见 [HISTORY-AND-MATERIALS.md](docs/HISTORY-AND-MATERIALS.md)：历史列表占侧栏主要空间，点外部收起，模型浮层按 API26 能力显式开启沉浸光感。
 
 ## 开发环境
 
@@ -61,14 +66,20 @@
     node tests/attachments.test.mjs
     node tests/permission-metadata.test.mjs
     node tests/appearance.test.mjs
+    node tests/immersive-materials.test.mjs
+    node tests/native-driver.test.mjs
+    node tests/ui-palette.test.mjs
     node tests/local-state.test.mjs
     node tests/workspace-http.test.mjs
+    node tests/notifications.test.mjs
     node tests/performance.mjs
     python tests/domain_entry_test.py
 
-Python设置服务的11项测试使用Linux运行 `python3 tests/mobile_settings_test.py`，依赖fcntl；Windows本机仅运行上述Node测试。
+Python设置服务的11项测试使用Linux运行 `python3 tests/mobile_settings_test.py`，依赖fcntl；Windows本机运行上述 Node 回归和 domain_entry_test.py。
 
 测试从本机 SDK 读取 TypeScript 转译器，不需要下载测试依赖。状态测试运行真实客户端逻辑，只替换平台接口。审批服务端修复、部署与原生失败恢复验收见 [APPROVALS.md](docs/APPROVALS.md)。
+
+悬浮标题、输入区和工作空间二级入口见 [FLOATING-CHAT.md](docs/FLOATING-CHAT.md)。
 
 ## 本机联调服务
 
@@ -88,7 +99,7 @@ App 地址填写 http://127.0.0.1:4210，账号 opencode，测试密码 local-te
 
 生产使用经验证的 HTTPS URL及 OpenCode API 凭据。SSH 账号和 API 账号不是同一认证体系；v2.0.29 的 Basic 用户名是 opencode。
 
-备案期间已提供独立9443 HTTPS入口，使用专用CA及服务器公钥绑定。App中填写HTTPS地址，勾选“使用专用服务器证书”，无需保持电脑或SSH隧道在线。独立账号、受限文件系统、证书期限及运维边界见 [SERVER.md](docs/SERVER.md)。
+正式域名已提供标准443 HTTPS入口，App填写域名即可，使用系统证书校验。网页提供所有者登录与一次性账号初始化，不开放公共注册；网页与App使用同一账号。设置方式、安全边界及服务测试见 [ACCOUNT.md](docs/ACCOUNT.md)。原IP9443保留专用CA及服务器公钥绑定兼容方式。独立服务账号、受限文件系统、证书期限及运维边界见 [SERVER.md](docs/SERVER.md)。
 
 scripts/provision-server.sh 是供核验后使用的独立实例部署脚本。它拒绝覆盖已有单位或抢占端口；不会运行修改默认后台服务的 opencode service set。
 
@@ -108,3 +119,5 @@ scripts/provision-server.sh 是供核验后使用的独立实例部署脚本。�
 主要参考 [alvarolorentedev/opencode-mobile](https://github.com/alvarolorentedev/opencode-mobile) 的协议适配和同步设计，固定提交与来源见 [THIRD_PARTY.md](docs/THIRD_PARTY.md)。本项目使用 Apache-2.0；不使用参考应用的品牌或发布身份。
 
 OpenCode Harmony 是独立客户端，与 OpenCode 官方没有隶属关系。
+
+DeepSeek Graphite / Liquid Glass 分支的审查、修正和本轮验证范围见 [UI-REVIEW.md](docs/UI-REVIEW.md)。

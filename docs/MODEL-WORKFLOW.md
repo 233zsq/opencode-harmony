@@ -1,5 +1,7 @@
 # 模型配置与选择完善（2026-10-19）
 
+> 2026-10-22：当前模型浮层与验收入口以 [MODEL-PREFERENCES.md](MODEL-PREFERENCES.md) 为准；下文保留当时实现和验收记录。
+
 ## 本轮结果
 
 修复提供商选择与配置表单身份不一致；保存操作固定使用点击时的内容。聊天顶部改为可搜索的原生模型面板，保持 API24 最低兼容、API26 编译和目标版本。
@@ -40,7 +42,7 @@
     node tests/fake-server.mjs
     node tests/provider-ui.mjs repro
     node tests/provider-ui.mjs
-    node tests/model-picker-ui.mjs
+    node tests/model-controls-ui.mjs
 
 原生脚本需先通过 HDC 反向映射 4210，连接明确标识的本机测试配置并选择测试会话；脚本拒绝非本机测试模型。模拟器可用 DevEco 或其[官方命令行工具](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ide-emulator-command-line)启动，保留原设备数据。完成后移除临时配置和反向端口，恢复原有 HTTPS 连接。
 
