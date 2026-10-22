@@ -677,6 +677,62 @@ await test('late disk cache cannot overwrite a newly selected session',async()=>
  const loading=t.store.restoreTranscript(0);t.store.generation++;t.store.sessionID='ses_new';
  release({messages:[message('old','old')],cursor:'',savedAt:1});await loading;assert.equal(t.store.messages.length,0);
 });
+await test('first online tail replaces a noncontiguous cached page and adopts its server cursor',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=0;const requested=[];
+ t.store.attachCache({size:async()=>1,load:async()=>({messages:Array.from({length:30},(_,i)=>message('m'+(i+1),'cached')),cursor:'',savedAt:1}),save:async()=>{}});
+ t.store.api.messages=async(_id,cursor='')=>{requested.push(cursor);return{data:[],cursor:{next:cursor?'before-71':'before-101'}};};
+ t.store.api.parseMessages=()=>Array.from({length:30},(_,i)=>message('m'+(i+(requested.at(-1)?71:101)),'server'));
+ await t.store.restoreTranscript(0);await t.store.sync();
+ assert.equal(t.store.messages.length,30);assert.equal(t.store.messages[0].id,'m101');assert.equal(t.store.cursor,'before-101');assert.equal(t.store.cacheRestored,false);
+ await t.store.older();assert.equal(requested.at(-1),'before-101');assert.equal(t.store.messages.length,60);assert.equal(t.store.messages[0].id,'m71');assert.equal(t.store.cursor,'before-71');
+});
+await test('an authoritative empty tail removes stale cached messages and pagination',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=0;
+ t.store.attachCache({size:async()=>1,load:async()=>({messages:[message('removed','cached')],cursor:'obsolete',savedAt:1}),save:async()=>{}});
+ await t.store.restoreTranscript(0);await t.store.sync();assert.equal(t.store.messages.length,0);assert.equal(t.store.cursor,'');
+});
+await test('replacing a cached tail preserves text received over SSE while its request was pending',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=0;let release;
+ t.store.attachCache({size:async()=>1,load:async()=>({messages:[message('cached','old')],cursor:'old',savedAt:1}),save:async()=>{}});
+ t.store.api.messages=()=>new Promise(resolve=>release=resolve);t.store.api.parseMessages=()=>[message('server','tail')];
+ await t.store.restoreTranscript(0);const syncing=t.store.sync();
+ t.store.onFrame({data:JSON.stringify({type:'session.text.delta',location:{directory:'/repo'},data:{sessionID:'ses_a',assistantMessageID:'live',ordinal:0,delta:'new text'}})});
+ release({data:[],cursor:{next:'server-cursor'}});await syncing;
+ assert.deepEqual(Array.from(t.store.messages,m=>m.id),['server','live']);assert.equal(t.store.messages[1].text,'new text');assert.equal(t.store.cursor,'server-cursor');
+});
+await test('SSE authentication and certificate rejection invalidate a pending disk restore and purge its account cache',async()=>{
+ for(const code of [401,403,495]){
+  const t=trafficStore();t.store.lastHistorySync=0;let release,reject,purges=0;
+  t.store.attachCache({size:async()=>1,load:()=>new Promise(resolve=>release=resolve),removeServer:async config=>{assert.equal(config.username,'owner');purges++;}});
+  t.store.api.stream=(_frame,_data,error)=>{reject=error;return()=>{};};
+  const restoring=t.store.restoreTranscript(0);t.store.openStream();reject(new protocol.ApiError(code,'fixture rejection'));
+  release({messages:[message('private','cached')],cursor:'old',savedAt:1});await restoring;
+  assert.equal(t.store.networkBlocked,true);assert.equal(t.store.status,code===495?'证书校验失败':'认证失败');assert.equal(t.store.messages.length,0);assert.equal(t.store.cacheRestored,false);assert.equal(purges,1);
+ }
+});
+await test('SSE rejection clears an already restored cache and marks pending controls stale',async()=>{
+ const t=trafficStore();t.store.lastHistorySync=0;let reject,purges=0;
+ t.store.attachCache({size:async()=>1,load:async()=>({messages:[message('private','cached')],cursor:'',savedAt:1}),removeServer:async()=>{purges++;}});
+ t.store.api.stream=(_frame,_data,error)=>{reject=error;return()=>{};};
+ await t.store.restoreTranscript(0);t.store.pendingItems=[pendingItem('p')];t.store.openStream();reject(new protocol.ApiError(403,'fixture rejection'));
+ assert.equal(t.store.messages.length,0);assert.equal(t.store.cacheRestored,false);assert.equal(purges,1);assert.equal(t.store.pendingItems[0].stale,true);
+});
+await test('history arriving after SSE authentication failure cannot display or persist revoked data',async()=>{
+ const t=trafficStore();let release,reject,writes=0;t.store.cacheRestored=true;t.store.messages=[message('private','cached')];
+ t.store.attachCache({size:async()=>1,save:async()=>{writes++;},removeServer:async()=>{}});
+ t.store.api.messages=()=>new Promise(resolve=>release=resolve);t.store.api.parseMessages=()=>[message('late','revoked')];
+ t.store.api.stream=(_frame,_data,error)=>{reject=error;return()=>{};};t.store.openStream();const syncing=t.store.sync();
+ reject(new protocol.ApiError(401,'fixture rejection'));release({data:[],cursor:{next:''}});await syncing;
+ assert.equal(t.store.messages.length,0);assert.equal(writes,0);
+});
+await test('a delayed attachment hydration cannot restore history after SSE authentication failure',async()=>{
+ const t=trafficStore();let release,reject,writes=0,enter;const entered=new Promise(resolve=>enter=resolve);
+ const file={id:'late-file-0',name:'a.png',mime:'image/png',data:'',size:1,remoteHash:'a'.repeat(64),remoteMessage:'late',remoteIndex:0};
+ t.store.attachCache({size:async()=>1,file:()=>{enter();return new Promise(resolve=>release=resolve);},save:async()=>{writes++;},removeServer:async()=>{}});
+ t.store.api.parseMessages=()=>[{...message('late','revoked'),files:[file]}];t.store.api.stream=(_frame,_data,error)=>{reject=error;return()=>{};};
+ t.store.openStream();const syncing=t.store.sync();await entered;assert.equal(typeof release,'function');
+ reject(new protocol.ApiError(401,'fixture rejection'));release('');await syncing;assert.equal(t.store.messages.length,0);assert.equal(writes,0);
+});
 await test('clearing cache during an outstanding history read does not repopulate disk from that read',async()=>{
  const t=trafficStore();let release,writes=0,clears=0;
  t.store.api.messages=()=>new Promise(resolve=>release=resolve);

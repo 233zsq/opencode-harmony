@@ -189,7 +189,7 @@ export class AppStore {
       const position = await this.storage.last(config.id);
       if (position.length < 2) { return; }
       const snapshot = await this.transcriptCache.load(config, position[0], position[1]);
-      if (!snapshot || generation !== this.generation || epoch !== this.cacheEpoch) { return; }
+      if (!snapshot || generation !== this.generation || epoch !== this.cacheEpoch || this.networkBlocked) { return; }
       this.connected = config.id; this.directory = position[0]; this.sessionID = position[1];
       this.messages = boundMessageAttachments(snapshot.messages); this.cursor = snapshot.cursor; this.tailLoaded = true;
       this.interactions = []; this.cacheRestored = true; this.status = '离线缓存'; this.sessionTitle = '缓存会话';
@@ -200,7 +200,7 @@ export class AppStore {
     if (!config) { return; }
     try {
       const snapshot = await this.transcriptCache.load(config, directory, id);
-      if (snapshot && generation === this.generation && epoch === this.cacheEpoch && !this.lastHistorySync && !this.syncing) {
+      if (snapshot && generation === this.generation && epoch === this.cacheEpoch && !this.networkBlocked && !this.lastHistorySync && !this.syncing) {
         this.messages = boundMessageAttachments(snapshot.messages); this.cursor = snapshot.cursor; this.tailLoaded = true; this.cacheRestored = true;
       }
     } catch (_) { this.cacheNotice = '本机缓存暂不可用，正在联网读取'; }
@@ -817,7 +817,7 @@ export class AppStore {
     }, () => { if (generation === this.generation && streamEpoch === this.streamEpoch) { this.lastData = Date.now(); } }, (error: Error) => {
       if (generation !== this.generation || streamEpoch !== this.streamEpoch || !this.active) { return; }
       if (error instanceof ApiError && (error.code === 401 || error.code === 403 || error.code === 495)) {
-        this.networkBlocked = true; this.status = error.code === 495 ? '证书校验失败' : '认证失败'; this.error = error.message; this.stopNetwork(); return;
+        this.fail(error as Error); return;
       }
       this.streamReady = false;
       this.suppressNotificationCatchUp();
@@ -939,12 +939,13 @@ export class AppStore {
     this.syncing = true; const generation = this.generation; const api = this.api;
     const id = this.sessionID; const epoch = this.eventEpoch; const transcript = this.transcriptEpoch; const selection = this.selectionEpoch;
     const cacheEpoch = this.cacheEpoch; const directory = this.directory;
+    const cachedBaseline = this.cacheRestored && !this.readingHistory ? this.messages : undefined;
     try {
       const response = await api.messages(id);
-      if (generation !== this.generation || transcript !== this.transcriptEpoch) { return; }
+      if (generation !== this.generation || transcript !== this.transcriptEpoch || this.networkBlocked) { return; }
       const incoming = api.parseMessages(response);
       await this.cachedFiles(incoming, api.config);
-      if (generation !== this.generation || transcript !== this.transcriptEpoch) { return; }
+      if (generation !== this.generation || transcript !== this.transcriptEpoch || this.networkBlocked) { return; }
       const safe = incoming.map((m: ChatMessage): ChatMessage => {
         const current = this.messages.find((old: ChatMessage) => old.id === m.id);
         if (current && m.state !== 'completed' &&
@@ -957,11 +958,16 @@ export class AppStore {
       if (this.readingHistory) {
         if (safe.some((m: ChatMessage) => !this.messages.some((old: ChatMessage) => old.id === m.id))) { this.newerAvailable = true; }
         this.messages = mergeMessages(this.messages, safe.filter((m: ChatMessage) => this.messages.some((old: ChatMessage) => old.id === m.id)));
-      } else { const merged = mergeMessages(this.messages, safe); this.messages = merged.length > 300 ? merged.slice(-300) : merged; }
+      } else {
+        // A disk tail may be separated from the server tail by more than one page.
+        // Replace that baseline, retaining messages changed by SSE during this read.
+        const previous = cachedBaseline ? this.messages.filter((m: ChatMessage) => cachedBaseline.indexOf(m) < 0) : this.messages;
+        const merged = mergeMessages(previous, safe, cachedBaseline !== undefined); this.messages = merged.length > 300 ? merged.slice(-300) : merged;
+      }
       this.messages = boundMessageAttachments(this.messages);
       this.cacheRestored = false; this.lastHistorySync = Date.now(); this.lastProbe = Date.now();
       this.saveTranscript(api.config, id, directory, safe, string(object(object(response)['cursor'])['next']), cacheEpoch);
-      if (!this.tailLoaded) { this.cursor = string(object(object(response)['cursor'])['next']); this.tailLoaded = true; }
+      if (!this.tailLoaded || cachedBaseline) { this.cursor = string(object(object(response)['cursor'])['next']); this.tailLoaded = true; }
       if (this.pendingSend) {
         const pending = this.pendingSend; let confirmed = incoming.some((m: ChatMessage) => m.id === pending.id);
         if (!confirmed) {

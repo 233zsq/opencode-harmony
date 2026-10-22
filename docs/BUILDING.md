@@ -47,7 +47,7 @@ node tests/transcript-cache.test.mjs
 node tests/workspace-http.test.mjs
 ~~~
 
-其余测试位于 tests/。模拟器交互测试需要本机 fixture 和 HDC；Python 服务测试需要 Linux 与相应依赖。网页交互测试使用 Playwright，可通过 CODEX_PLAYWRIGHT 指定已安装模块路径。测试结果和截图统一保存在被忽略的 .test/。
+其余测试位于 tests/。模拟器交互测试需要本机 fixture 和 HDC；Python 服务测试需要 Linux 与相应依赖。网页交互测试使用 Playwright 和 Python/Flask，从仓库模板自动生成隔离页面，无需预先准备 HTML。安装 server/account/requirements.txt 后运行 node tests/account-web.test.mjs；可通过 CODEX_PLAYWRIGHT 指定 Playwright 模块路径、PYTHON_BINARY 指定 Python 可执行文件、EDGE_BINARY 指定浏览器。测试会自动创建输出目录，结果和截图保存在被忽略的 .test/。
 
 ## 文档范围
 

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-import {readFileSync,mkdtempSync,rmSync} from 'node:fs';
+import {readFileSync,mkdirSync,mkdtempSync,rmSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import vm from 'node:vm';
 const require=createRequire(import.meta.url),root=resolve(import.meta.dirname,'..');
 const ts=require(resolve(process.env.DEVECO_STUDIO_HOME||'C:/Program Files/Huawei/DevEco Studio','sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'));
+mkdirSync(join(root,'.test'),{recursive:true});
 const directory=mkdtempSync(join(root,'.test','cache-sql-'));
 const databases=new Map();let clock=1,encryptedOpens=0;
 class CacheDate extends Date{static now(){return clock++;}}
