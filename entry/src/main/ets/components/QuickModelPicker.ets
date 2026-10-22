@@ -49,8 +49,11 @@ export struct QuickModelPicker {
   @Builder
   allModels() {
     Column({ space: 5 }) {
+      // TextInput styles its placeholder independently of the entered text.
       TextInput({ placeholder: '搜索已启用模型', text: this.query }).id('inline-model-search').height(34).fontSize(12).fontWeight(FontWeight.Normal)
-        .padding({ left: 10, right: 10 }).backgroundColor(C.field).caretColor(C.text).borderRadius(12).placeholderColor(C.muted).enabled(!this.busy)
+        .placeholderFont({ size: 12, weight: FontWeight.Normal }).fontColor(C.text)
+        .padding({ left: 10, right: 10 }).backgroundColor(Color.Transparent).caretColor(C.text)
+        .border({ width: 0.5, color: C.glass_stroke }).borderRadius(12).placeholderColor(C.muted).enabled(!this.busy)
         .onChange((value: string) => { this.query = value; this.limit = 30; })
       List({ space: 0 }) {
         ForEach(this.matches().slice(0, this.limit), (model: ModelItem) => { ListItem() { this.modelRow(model, 'inline-model-option-', true) } }, (model: ModelItem) => model.id + String(model.id === this.current))
