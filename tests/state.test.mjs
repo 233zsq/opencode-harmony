@@ -373,8 +373,8 @@ await test('switching conversations restores unsent text and the same uncertain 
  store.disconnect();store.connected='two';store.directory='/repo';store.api={};await store.openSession(workspaceSession('a'));assert.equal(store.draft,'');assert.equal(store.pendingSend,undefined);
 });
 await test('a late send acknowledgement cannot clear another conversations draft or leave it busy',async()=>{
- const store=new AppStore();store.connected='one';store.directory='/repo';store.active=false;store.sessionID='a';store.draft='A';let release;
- store.api={request:()=>new Promise(r=>release=r)};const send=store.send();await store.openSession(workspaceSession('b'));store.draft='B';release({});await send;
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.active=false;store.sessionID='a';store.draft='A';let release,enter;const entered=new Promise(resolve=>enter=resolve);
+ store.api={request:()=>{enter();return new Promise(r=>release=r);}};const send=store.send();await entered;await store.openSession(workspaceSession('b'));store.draft='B';release({});await send;
  assert.equal(store.sessionID,'b');assert.equal(store.draft,'B');assert.equal(store.busy,false);await store.openSession(workspaceSession('a'));assert.equal(store.pendingSend.text,'A');
 });
 await test('local archive/pin saves no API mutations and failed preferences retain visible state',async()=>{
@@ -773,5 +773,58 @@ await test('a delayed disk read after navigation cannot launch an obsolete attac
  t.store.attachCache({size:async()=>0,file:()=>new Promise(resolve=>{release=resolve;}),saveFile:async()=>{}});
  t.store.api.historyFile=async()=>{downloads++;return file;};
  const pending=t.store.attachmentPreview(file);t.store.generation++;release('');await pending;assert.equal(downloads,0);
+});
+await test('text drafts save only text and keep their immutable original session scope',async()=>{
+ const t=trafficStore();let saved;t.store.connected='a';t.store.attachDraftStore({saveDraft:async(...args)=>saved=args,loadDraft:async()=>''});
+ t.store.updateDraft('draft text');await t.store.flushTextDraft();assert.equal(saved[0].username,'owner');assert.deepEqual(saved.slice(1),['/repo','ses_a','draft text']);assert.equal(t.store.pendingSend,undefined);
+});
+await test('restored encrypted drafts never send automatically or restore attachments',async()=>{
+ const t=trafficStore();t.store.attachDraftStore({loadDraft:async()=> 'saved text',saveDraft:async()=>{throw Error('unexpected write');}});
+ await t.store.restoreTextDraft(0);assert.equal(t.store.draft,'saved text');assert.equal(t.store.attachments.length,0);assert.equal(t.store.pendingSend,undefined);assert.match(t.store.draftNotice,/已恢复/);assert.equal(t.pages(),0);
+});
+await test('late draft reads cannot replace user typing or another session',async()=>{
+ for(const change of [store=>store.updateDraft('typed now'),store=>{store.generation++;store.sessionID='other';}]){
+  const t=trafficStore();let release;t.store.attachDraftStore({loadDraft:()=>new Promise(resolve=>release=resolve),saveDraft:async()=>{}});
+  const reading=t.store.restoreTextDraft(0);change(t.store);release('old text');await reading;assert.notEqual(t.store.draft,'old text');
+ }
+});
+await test('auth failure and explicit cache clearing invalidate outstanding draft restores',async()=>{
+ for(const clear of [store=>store.fail(new protocol.ApiError(401,'rejected')),store=>store.clearCache()]){
+  const t=trafficStore();let release;t.store.attachDraftStore({loadDraft:()=>new Promise(resolve=>release=resolve),saveDraft:async()=>{}});
+  const reading=t.store.restoreTextDraft(0);await clear(t.store);release('old private');await reading;assert.equal(t.store.draft,'');
+ }
+});
+await test('sending clears the persisted text before posting and pending messages are not autosaved',async()=>{
+ const t=trafficStore(),order=[];t.store.modelID='model';t.store.updateDraft('prompt');
+ t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async(_c,_d,_s,text)=>order.push('draft:'+text)});
+ const request=t.store.api.request;t.store.api.request=async(path,method,body)=>{if(path.endsWith('/prompt'))order.push('post:'+body.text);return request(path);};
+ await t.store.send();assert.deepEqual(order.slice(0,2),['draft:','post:prompt']);assert.equal(t.store.draft,'');
+ t.store.pendingSend={id:'pending',sessionID:'ses_a',text:'uncertain'};t.store.updateDraft('uncertain');await t.store.flushTextDraft();assert.equal(order.length,2);
+});
+await test('background transition flushes text and cache errors do not prevent an online send',async()=>{
+ const t=trafficStore();let saved='';t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async(_c,_d,_s,text)=>{saved=text;}});
+ t.store.updateDraft('background text');t.store.setActive(false);await Promise.resolve();assert.equal(saved,'background text');
+ t.store.api.stream=()=>()=>{};t.store.setActive(true);t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async()=>{throw Error('disk full');}});
+ let posted=false;t.store.api.request=async(path)=>{if(path.endsWith('/prompt'))posted=true;return{data:{}};};await t.store.send();assert.equal(posted,true);
+});
+await test('auth rejection removes an unchanged restored draft but preserves newly typed local text',async()=>{
+ for(const edit of [false,true]){
+  const t=trafficStore();t.store.attachDraftStore({loadDraft:async()=> 'private cached',saveDraft:async()=>{}});await t.store.restoreTextDraft(0);
+  if(edit)t.store.updateDraft('new unsent');t.store.fail(new protocol.ApiError(401,'rejected'));
+  assert.equal(t.store.draft,edit?'new unsent':'');
+ }
+});
+await test('unavailable native storage never claims a draft was saved',async()=>{
+ const t=trafficStore();t.store.updateDraft('unsaved');await t.store.flushTextDraft();assert.match(t.store.draftNotice,/未能保存/);assert.ok(!t.store.draftNotice.includes('已加密保存'));
+});
+await test('offline text draft recovery is independent of an evicted transcript snapshot',async()=>{
+ const t=trafficStore();t.store.api=undefined;t.store.storage.last=async()=>['/repo','ses_a'];
+ t.store.attachDraftStore({loadDraft:async()=> 'draft without history',saveDraft:async()=>{}});
+ await t.store.restoreOffline({id:'a',url:'https://cache.example',username:'owner'},0);
+ assert.equal(t.store.draft,'draft without history');assert.equal(t.store.sessionID,'ses_a');assert.equal(t.store.messages.length,0);assert.equal(t.store.cacheRestored,true);assert.equal(t.store.canSendMessages(),false);
+});
+await test('known authentication failure disables sending without creating an uncertain request',async()=>{
+ const t=trafficStore();t.store.networkBlocked=true;t.store.updateDraft('keep text');t.store.api.request=async()=>{throw Error('must not send');};
+ assert.equal(t.store.canSendMessages(),false);await t.store.send();assert.equal(t.store.pendingSend,undefined);assert.equal(t.store.draft,'keep text');
 });
 console.log(count + ' adapter/state tests passed.');
