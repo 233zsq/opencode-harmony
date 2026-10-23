@@ -1,11 +1,10 @@
+import { ts } from './helpers/typescript.mjs';
 // Synthetic Node benchmark; device frame rate and real large repositories require separate acceptance.
 import assert from 'node:assert/strict';
 import {performance} from 'node:perf_hooks';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
-import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
-const require=createRequire(import.meta.url);
-const ts=require(resolve(process.env.DEVECO_STUDIO_HOME||'C:/Program Files/Huawei/DevEco Studio','sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'));
+
 const code=ts.transpileModule(readFileSync('entry/src/main/ets/domain/Core.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
 const core=await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'));
 const results=[];function scenario(name,run){const start=performance.now();const detail=run();results.push({name,milliseconds:Math.round((performance.now()-start)*100)/100,...detail});}

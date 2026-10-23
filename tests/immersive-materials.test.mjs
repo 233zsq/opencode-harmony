@@ -1,10 +1,9 @@
+import { ts } from './helpers/typescript.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
 import vm from 'node:vm';
-const require=createRequire(import.meta.url);
-const ts=require(resolve(process.env.DEVECO_STUDIO_HOME||'C:/Program Files/Huawei/DevEco Studio','sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'));
+
 const source=readFileSync(new URL('../entry/src/main/ets/presentation/ImmersiveMaterials.ets',import.meta.url),'utf8');
 const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 function harness(version,{available=true,failed=false}={}) {
