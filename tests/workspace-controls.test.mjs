@@ -1,12 +1,10 @@
+import { ts } from './helpers/typescript.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
-const require = createRequire(import.meta.url);
 const root = resolve(import.meta.dirname, '..');
-const ts = require(resolve(process.env.DEVECO_STUDIO_HOME || 'C:/Program Files/Huawei/DevEco Studio',
-  'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'));
+
 class Encoder { encodeInto(value) { return new TextEncoder().encode(value); } }
 class Decoder { constructor() { this.decoder = new TextDecoder(); } decodeToString(value, options) { return this.decoder.decode(value, options); } }
 class Base64 { encodeToStringSync(bytes) { return Buffer.from(bytes).toString('base64'); } }

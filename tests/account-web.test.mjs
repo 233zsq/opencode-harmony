@@ -1,6 +1,6 @@
 // Isolated rendered Flask home fixture, with all browser requests intercepted.
 import assert from 'node:assert/strict';
-import {readFileSync,mkdirSync} from 'node:fs';
+import {readFileSync,mkdirSync,existsSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
@@ -16,7 +16,9 @@ const html=process.env.ACCOUNT_WEB_HTML?readFileSync(process.env.ACCOUNT_WEB_HTM
 assert.ok(html.includes('data-mode="home"'));
 const summary={available:true,month:'2026-10',started_at:'2026-10-22T10:29:49+00:00',updated_at:'2026-10-22T10:35:00+00:00',http_bytes:3250000000,
  projects:{opencode:{bytes:250000000},fieldnotes:{bytes:3000000000},other:{bytes:0}}};
-const browser=await chromium.launch({executablePath:process.env.EDGE_BINARY||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});
+const defaultEdge='C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const browserPath=process.env.EDGE_BINARY||(process.platform==='win32'&&existsSync(defaultEdge)?defaultEdge:undefined);
+const browser=await chromium.launch({executablePath:browserPath,headless:true});
 try{
  for(const colorScheme of ['light','dark']){
   const page=await browser.newPage({viewport:{width:390,height:844},colorScheme});

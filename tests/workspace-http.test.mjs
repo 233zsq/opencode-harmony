@@ -1,12 +1,11 @@
+import { ts } from './helpers/typescript.mjs';
 // Real loopback HTTP integration. No cloud connection, model call or device is used.
 import assert from 'node:assert/strict';
 import httpServer from 'node:http';
 import {readFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
 import vm from 'node:vm';
-const require=createRequire(import.meta.url);
-const ts=require(resolve(process.env.DEVECO_STUDIO_HOME||'C:/Program Files/Huawei/DevEco Studio','sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'));
+
 const sessions=Array.from({length:70},(_,i)=>({id:'s'+i,title:'Conversation '+i,location:{directory:'/repo'},time:{created:1,updated:100-i}}));
 sessions.push({id:'other',title:'Other project',location:{directory:'/second'},time:{created:1,updated:1}});
 const forms=[{id:'q',sessionID:'s0',title:'Choose',fields:[]}];

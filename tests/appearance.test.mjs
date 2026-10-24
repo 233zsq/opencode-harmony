@@ -1,10 +1,9 @@
+import { ts } from './helpers/typescript.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
 import vm from 'node:vm';
-const require=createRequire(import.meta.url);
-const ts=require(resolve(process.env.DEVECO_STUDIO_HOME||'C:/Program Files/Huawei/DevEco Studio','sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'));
+
 function harness(initial='system',fail=false){
  const values=new Map([['mode',initial]]),storage=new Map(),calls=[];let color=1,flushed=0;
  const context={getApplicationContext:()=>({setColorMode:mode=>{calls.push(mode);color=mode===0?0:1;}}),resourceManager:{getConfigurationSync:()=>({colorMode:color})}};

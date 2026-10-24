@@ -1,10 +1,10 @@
+import { ts } from './helpers/typescript.mjs';
 // Native attachment reader fault injection plus exact wire-format checks; no external calls.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
 import {resolve} from 'node:path';
 import vm from 'node:vm';
-const require=createRequire(import.meta.url),ts=require(resolve(process.env.DEVECO_STUDIO_HOME||'C:/Program Files/Huawei/DevEco Studio','sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js'));
+
 const fixtures=new Map();let saved=[],writeFailure=false,syncFailure=false,zeroWrite=false;let selected=[],closed=0,released=0,position=0,current,readCalls=0,failRead=false;
 const fileIo={OpenMode:{READ_ONLY:0,READ_WRITE:1,CREATE:2,TRUNC:4},open:async uri=>{current=fixtures.get(uri);assert.ok(current);position=0;return{fd:1};},stat:async()=>({size:current.size??current.bytes.length}),close:async()=>{closed++;},fsync:async()=>{if(syncFailure)throw new Error('controlled sync failure');},write:async(fd,buffer,options)=>{if(writeFailure)throw new Error('controlled write failure');if(zeroWrite)return 0;const n=Math.min(2,buffer.byteLength);saved.push(...new Uint8Array(buffer).slice(0,n));return n;},read:async(fd,buffer,options)=>{readCalls++;if(failRead)throw new Error('controlled read failure');assert.equal(options.offset,undefined);const n=Math.min(3,current.bytes.length-position,buffer.byteLength);new Uint8Array(buffer).set(current.bytes.subarray(position,position+n));position+=n;return n;}};
 const image={createImageSource:()=>({getImageInfo:async()=>({size:{width:4000,height:2000}}),createPixelMap:async options=>{assert.equal(options.desiredSize.width,1536);return{release:async()=>released++};},release:async()=>released++}),createImagePacker:()=>({packToData:async(pixels,options)=>{assert.equal(options.format,'image/jpeg');return new Uint8Array([255,216,255,217]).buffer;},release:async()=>released++})};

@@ -38,16 +38,26 @@ server/ 包含可选的登录、设置和流量统计扩展。scripts/ 中的部
 
 ## 验证
 
-常用逻辑回归使用 IDE 配套 Node.js，测试会从本机 SDK 读取 TypeScript 转译器：
+本机或干净的 Windows/Linux 环境都可运行逻辑回归，需 Node.js 24：
 
 ~~~sh
-node tests/core.test.mjs
-node tests/state.test.mjs
-node tests/transcript-cache.test.mjs
-node tests/workspace-http.test.mjs
+npm ci
+npm test
 ~~~
 
-其余测试位于 tests/。模拟器交互测试需要本机 fixture 和 HDC；Python 服务测试需要 Linux 与相应依赖。网页交互测试使用 Playwright 和 Python/Flask，从仓库模板自动生成隔离页面，无需预先准备 HTML。安装 server/account/requirements.txt 后运行 node tests/account-web.test.mjs；可通过 CODEX_PLAYWRIGHT 指定 Playwright 模块路径、PYTHON_BINARY 指定 Python 可执行文件、EDGE_BINARY 指定浏览器。测试会自动创建输出目录，结果和截图保存在被忽略的 .test/。
+npm 锁定的 TypeScript 仅用于平台替身上的逻辑检查；未安装 npm 依赖时，单独执行 tests/*.test.mjs 仍可使用本机 DevEco SDK 转译器。真正的 ArkTS 编译、原生加密和设备布局需通过 DevEco 与设备另外验证。
+
+网页检查使用 Python 3.12、Flask 和 Playwright，从仓库模板自动生成隔离页面：
+
+~~~sh
+python -m pip install -r server/account/requirements.lock
+npx playwright install chromium
+npm run test:web
+~~~
+
+可通过 PYTHON_BINARY 指定 Python、EDGE_BINARY 指定已有浏览器。Windows 默认可复用本机 Edge，其他环境使用 Playwright 的 Chromium。测试输出自动写入被忽略的 .test/。
+
+GitHub Actions 在发往 main 的 PR、main 提交和版本标签上自动运行 Windows/Linux 逻辑回归、Linux Python/真实 Nginx 测试和网页浅深色检查。所有服务测试使用 loopback 与临时数据，不读取线上账号、签名或私有服务器配置。模拟器脚本和真实服务脚本需按各自前置条件单独运行。
 
 ## 文档范围
 

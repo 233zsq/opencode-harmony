@@ -6,7 +6,7 @@
 
 一个使用 ArkTS / ArkUI 构建的原生远程客户端。连接自己的 OpenCode 服务器，在手机或平板上继续对话、查看代码、处理问答和审批。
 
-**[v0.1 Beta · 源码预览版](https://github.com/233zsq/opencode-harmony/releases/tag/v0.1.0-beta)** · [更新说明](CHANGELOG.md) · [问题反馈](https://github.com/233zsq/opencode-harmony/issues)
+**[v0.1 Beta 2 · 源码预览版](https://github.com/233zsq/opencode-harmony/releases/tag/v0.1.0-beta.2)** · [更新说明](CHANGELOG.md) · [问题反馈](https://github.com/233zsq/opencode-harmony/issues)
 
 ## 可以做什么
 
