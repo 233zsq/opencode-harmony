@@ -169,7 +169,10 @@ struct Index {
     if (index < 0) { this.toast('消息已移出加载范围，请重新查找'); return; }
     this.navigate('chat'); this.follow = false; this.focusedMessage = hit.id;
     if (this.scrollTimer >= 0) { clearTimeout(this.scrollTimer); this.scrollTimer = -1; }
-    if (hit.label === '思考' && this.reasoningOpen.indexOf(hit.id) < 0) { this.reasoningOpen = this.reasoningOpen.concat([hit.id]); }
+    if (hit.label === '思考') {
+      this.reasoningClosed = this.reasoningClosed.filter((id: string): boolean => id !== hit.id);
+      if (this.reasoningOpen.indexOf(hit.id) < 0) { this.reasoningOpen = this.reasoningOpen.concat([hit.id]); }
+    }
     setTimeout(() => {
       if (scope !== this.store.exportScope() || this.store.pane !== 'chat') { return; }
       const current = this.store.messages.findIndex((m: ChatMessage) => m.id === hit.id);
