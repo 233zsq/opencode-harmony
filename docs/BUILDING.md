@@ -57,7 +57,13 @@ npm run test:web
 
 可通过 PYTHON_BINARY 指定 Python、EDGE_BINARY 指定已有浏览器。Windows 默认可复用本机 Edge，其他环境使用 Playwright 的 Chromium。测试输出自动写入被忽略的 .test/。
 
-GitHub Actions 在发往 main 的 PR、main 提交和版本标签上自动运行 Windows/Linux 逻辑回归、Linux Python/真实 Nginx 测试和网页浅深色检查。所有服务测试使用 loopback 与临时数据，不读取线上账号、签名或私有服务器配置。模拟器脚本和真实服务脚本需按各自前置条件单独运行。
+GitHub Actions 在所有 PR、main 提交和版本标签上自动运行 Windows/Linux 逻辑回归、Linux Python/真实 Nginx 测试和网页浅深色检查。所有服务测试使用 loopback 与临时数据，不读取线上账号、签名或私有服务器配置。模拟器脚本和真实服务脚本需按各自前置条件单独运行。
+
+## 新功能的模拟器检查
+
+`tests/search-drafts-ui.mjs` 的 search / paging / draft / offline / clear 模式仅用于已连接到 4216 loopback fixture 的 API26 模拟器；先运行 fake-server 并准备 cache-history 种子，paging 模式会切换到 360 条的导出种子会话，使用设备到本机的临时端口映射。offline 模式前停止 fixture，清理模式前恢复服务；结束后移除临时连接和映射。脚本不发送真实模型任务，不用于生产账号。
+
+会话查找只覆盖当前加载的最多 300 条消息，思考和工具默认不参与；附件仅搜索名称。文本草稿最多 20000 字符、100 份，复用本机加密缓存和 200 MiB 逻辑上限；附件、审批及结果待核对的发送请求不会持久化为草稿。恢复文本后仍需用户检查并手动发送，缓存或存储失败不会阻断在线功能。
 
 ## 文档范围
 

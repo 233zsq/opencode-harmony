@@ -3,10 +3,10 @@ import { relationalStore } from '@kit.ArkData';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { Attachment } from '../domain/Attachments';
-import { ServerConfig, ChatMessage, TranscriptSnapshot, TranscriptCachePort } from '../domain/Core';
+import { ServerConfig, ChatMessage, TranscriptSnapshot, TranscriptCachePort, TextDraftPort } from '../domain/Core';
 
 interface CacheEntry { body: string; }
-export class TranscriptCache implements TranscriptCachePort {
+export class TranscriptCache implements TranscriptCachePort, TextDraftPort {
   private db: relationalStore.RdbStore | undefined = undefined;
   private queue: Promise<void> = Promise.resolve();
   private encoder: util.TextEncoder = new util.TextEncoder();
@@ -108,6 +108,25 @@ export class TranscriptCache implements TranscriptCachePort {
         }
       }
       await this.write(await this.key(config, directory, id), scope, JSON.stringify(copy));
+      await this.trim();
+    });
+  }
+  loadDraft(config: ServerConfig, directory: string, id: string): Promise<string> {
+    return this.serial(async (): Promise<string> => {
+      const key = 'draft:' + await this.key(config, directory, id); const row = await this.read(key);
+      if (!row) { return ''; }
+      try { const value = JSON.parse(row.body) as string; if (typeof value === 'string' && value.length <= 20000) { return value; } } catch (_) {}
+      await this.db?.executeSql('DELETE FROM entries WHERE key=?', [key]); return '';
+    });
+  }
+  saveDraft(config: ServerConfig, directory: string, id: string, text: string): Promise<void> {
+    return this.serial(async (): Promise<void> => {
+      if (!this.db) { throw new Error('加密草稿存储尚未就绪'); }
+      if (text.length > 20000) { throw new Error('文本草稿最多 20000 字符'); }
+      const key = 'draft:' + await this.key(config, directory, id);
+      if (!text.trim()) { await this.db?.executeSql('DELETE FROM entries WHERE key=?', [key]); return; }
+      await this.write(key, await this.server(config), JSON.stringify(text));
+      await this.db?.executeSql("DELETE FROM entries WHERE key IN (SELECT key FROM entries WHERE key LIKE 'draft:%' ORDER BY touched DESC,key LIMIT -1 OFFSET 100)");
       await this.trim();
     });
   }
