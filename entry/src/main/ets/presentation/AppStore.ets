@@ -1,3 +1,5 @@
+import { MessageBookmark, MessageBookmarkPort, EmptyMessageBookmarks, bookmarkID, bookmarkMessage } from '../domain/MessageBookmarks';
+import { appendPromptTemplate } from '../domain/PromptTemplates';
 import { ModelPreferences, emptyModelPreferences, enabledModels, setModelEnabled, setModelFavorite, rememberModel } from '../domain/ModelSelection';
 import { prepareConnection, sameConnectionIdentity, ConnectionInput } from '../domain/Connections';
 import { SessionUsage, emptyUsage, CompactRecord } from '../domain/SessionUsage';
@@ -10,7 +12,7 @@ import { Storage } from '../data/Storage';
 import { ProviderStore } from './ProviderStore';
 import { Protocol, ApiError, parseUsage, parseCompactRecord, object, string, rows, list, json, Json } from '../data/Protocol';
 import { ServerConfig, ProjectItem, SessionItem, ModelItem, ChatMessage, Interaction, FormField, FileItem,
-  DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot, TranscriptCachePort, EmptyTranscriptCache } from '../domain/Core';
+  DiffItem, TurnItem, TimelineEntry, PendingItem, PendingPrompt, QuestionDraft, SessionPreference, ConversationMemory, filterSessions, sessionStatus, pendingKey, groupTurns, boundMessageAttachments, SseFrame, mergeMessages, applyTextDelta, buildFormAnswer, updateFieldValue, FieldValue, mergeFormDraft, previewText, interactionSnapshot, TranscriptCachePort, EmptyTranscriptCache, TextDraftPort, EmptyTextDraftStore, TranscriptSnapshot } from '../domain/Core';
 import { TaskNotification, TaskNotifySink, NoopTaskNotifier, NotificationLedger, NotificationKind, NotificationTarget,
   pendingNotificationKind, completionEventID, taskNotificationKind, isQuietReminder } from '../domain/Notifications';
 
@@ -166,6 +168,98 @@ export class AppStore {
   cacheRestored: boolean = false;
   private transcriptCache: TranscriptCachePort = new EmptyTranscriptCache();
   private cacheEpoch: number = 0;
+  private textDraftStore: TextDraftPort = new EmptyTextDraftStore();
+  private draftTimer: number = -1;
+  private draftRevision: number = 0;
+  private draftDirty: boolean = false;
+  private draftRestored: boolean = false;
+  draftNotice: string = '';
+  attachDraftStore(store: TextDraftPort): void { this.textDraftStore = store; }
+  bookmarks: MessageBookmark[] = [];
+  bookmarksReady: boolean = false;
+  bookmarksBusy: boolean = false;
+  bookmarkSaving: boolean = false;
+  bookmarkError: string = '';
+  private bookmarkStore: MessageBookmarkPort = new EmptyMessageBookmarks();
+  private bookmarkEpoch: number = 0;
+  private bookmarkServerID: string = '';
+  private bookmarkScope: string = '';
+  private bookmarkAccount(config: ServerConfig | undefined): string { return config ? JSON.stringify([config.url.replace(/\/+$/, ''), config.username]) : ''; }
+  attachBookmarkStore(store: MessageBookmarkPort): void { this.bookmarkStore = store; }
+  private bookmarkConfig(): ServerConfig | undefined { return this.servers.find((s: ServerConfig): boolean => s.id === (this.connected || this.bookmarkServerID)) || this.api?.config; }
+  private resetBookmarks(): void { this.bookmarkScope = ''; this.bookmarkEpoch++; this.bookmarks = []; this.bookmarksReady = false; this.bookmarksBusy = false; this.bookmarkSaving = false; this.bookmarkError = ''; }
+  async refreshBookmarks(): Promise<void> {
+    const config = this.bookmarkConfig(); if (!config || this.networkBlocked) { this.resetBookmarks(); this.bookmarkError = '请先选择有效的服务器连接'; return; }
+    const scope = this.bookmarkAccount(config); if (scope !== this.bookmarkScope) { this.resetBookmarks(); this.bookmarkScope = scope; }
+    if (this.bookmarkSaving) { return; } const epoch = ++this.bookmarkEpoch; this.bookmarksBusy = true; this.bookmarkError = '';
+    try { const items = await this.bookmarkStore.bookmarks(config);
+      if (epoch === this.bookmarkEpoch && !this.networkBlocked && scope === this.bookmarkAccount(this.bookmarkConfig())) { this.bookmarks = items; this.bookmarksReady = true; }
+    } catch (_) { if (epoch === this.bookmarkEpoch) { this.bookmarksReady = false; this.bookmarkError = '收藏未能读取，请重试；原有内容仍保留'; } }
+    finally { if (epoch === this.bookmarkEpoch) { this.bookmarksBusy = false; } }
+  }
+  isBookmarked(messageID: string): boolean { return this.bookmarkScope === this.bookmarkAccount(this.bookmarkConfig()) && this.bookmarks.some((item: MessageBookmark): boolean => item.id === bookmarkID(this.directory, this.sessionID, messageID)); }
+  async toggleBookmark(message: ChatMessage): Promise<boolean> {
+    const config = this.bookmarkConfig(); if (!config || !this.sessionID || !this.bookmarksReady || this.bookmarksBusy || this.bookmarkSaving || this.networkBlocked || this.bookmarkScope !== this.bookmarkAccount(config)) { return false; }
+    const id = bookmarkID(this.directory, this.sessionID, message.id); const existing = this.bookmarks.find((item: MessageBookmark): boolean => item.id === id);
+    if (existing) { return this.removeMessageBookmark(id); }
+    let item: MessageBookmark;
+    try { item = bookmarkMessage(message, this.directory, this.sessionID, this.sessionTitle); } catch (e) { this.bookmarkError = (e as Error).message; return false; }
+    const epoch = this.bookmarkEpoch; const scope = this.bookmarkAccount(config); this.bookmarkSaving = true; this.bookmarkError = '';
+    try { await this.bookmarkStore.saveBookmark(config, item);
+      if (epoch !== this.bookmarkEpoch || this.networkBlocked || scope !== this.bookmarkAccount(this.bookmarkConfig())) { return false; }
+      this.bookmarks = [item].concat(this.bookmarks); return true;
+    } catch (e) { if (epoch === this.bookmarkEpoch) { this.bookmarkError = (e as Error).message || '收藏未保存，请重试'; } return false; }
+    finally { if (epoch === this.bookmarkEpoch) { this.bookmarkSaving = false; } }
+  }
+  async removeMessageBookmark(id: string): Promise<boolean> {
+    const config = this.bookmarkConfig(); if (!config || this.bookmarkSaving || !this.bookmarksReady || this.networkBlocked || !this.bookmarks.some((item: MessageBookmark): boolean => item.id === id)) { return false; }
+    const epoch = this.bookmarkEpoch; const scope = this.bookmarkAccount(config); this.bookmarkSaving = true; this.bookmarkError = '';
+    try { await this.bookmarkStore.removeBookmark(config, id); if (epoch !== this.bookmarkEpoch || scope !== this.bookmarkAccount(this.bookmarkConfig()) || this.networkBlocked) { return false; }
+      this.bookmarks = this.bookmarks.filter((item: MessageBookmark): boolean => item.id !== id); return true;
+    } catch (_) { if (epoch === this.bookmarkEpoch) { this.bookmarkError = '未能取消收藏，请重试'; } return false; }
+    finally { if (epoch === this.bookmarkEpoch) { this.bookmarkSaving = false; } }
+  }
+  async openBookmarkSession(item: MessageBookmark): Promise<boolean> {
+    const config = this.bookmarkConfig(); if (!config || !this.canSendMessages() || !this.bookmarks.some((b: MessageBookmark): boolean => b.id === item.id)) { return false; }
+    return this.openNotificationTarget({ serverID: config.id, directory: item.directory, sessionID: item.sessionID, eventID: 'bookmark' });
+  }
+
+  insertPromptTemplate(text: string): boolean {
+    if (!this.sessionID || this.pendingSend || this.busy) { this.error = '请先打开会话，并完成当前发送确认'; return false; }
+    try { const next = appendPromptTemplate(this.draft, text); this.updateDraft(next); this.error = ''; return true; }
+    catch (error) { this.error = (error as Error).message; return false; }
+  }
+  updateDraft(text: string): void {
+    this.draft = text.slice(0, 20000); this.draftRevision++; this.draftRestored = false; this.draftDirty = true; this.draftNotice = '';
+    if (this.draftTimer >= 0) { clearTimeout(this.draftTimer); }
+    this.draftTimer = setTimeout(() => { this.draftTimer = -1; this.flushTextDraft(); }, 750);
+  }
+  async flushTextDraft(clear: boolean = false): Promise<void> {
+    if (this.draftTimer >= 0) { clearTimeout(this.draftTimer); this.draftTimer = -1; }
+    if ((!this.draftDirty && !clear) || this.networkBlocked || (this.pendingSend && !clear) || !this.sessionID) { return; }
+    const config = this.servers.find((s: ServerConfig) => s.id === this.connected) || this.api?.config;
+    if (!config) { return; }
+    const revision = this.draftRevision; const epoch = this.cacheEpoch; const generation = this.generation;
+    const text = clear ? '' : this.draft; const id = this.sessionID; const directory = this.directory; this.draftDirty = false;
+    try { await this.textDraftStore.saveDraft(config, directory, id, text); this.refreshCacheSize();
+      if (generation === this.generation && epoch === this.cacheEpoch && revision === this.draftRevision) { this.draftNotice = clear || !text ? '' : '文本草稿已加密保存'; }
+    }
+    catch (_) { if (generation === this.generation && epoch === this.cacheEpoch && revision === this.draftRevision) {
+      this.draftDirty = !clear; this.draftNotice = '文本草稿未能保存，请保留当前页面';
+    } }
+  }
+  private async restoreTextDraft(generation: number): Promise<void> {
+    const config = this.servers.find((s: ServerConfig) => s.id === this.connected) || this.api?.config;
+    if (!config || this.draft || this.pendingSend || this.attachments.length || this.networkBlocked) { return; }
+    const revision = this.draftRevision; const epoch = this.cacheEpoch;
+    try { const text = await this.textDraftStore.loadDraft(config, this.directory, this.sessionID);
+      if (text && generation === this.generation && epoch === this.cacheEpoch && revision === this.draftRevision && !this.networkBlocked && !this.draft && !this.pendingSend) {
+        this.draft = text; this.draftRestored = true; this.draftNotice = '已恢复本机文本草稿 · 附件需重新选择';
+      }
+    } catch (_) { if (generation === this.generation) { this.draftNotice = '本机草稿暂不可用'; } }
+  }
+  canSendMessages(): boolean { return !!this.api && !this.networkBlocked; }
+  canSearchEarlier(): boolean { return !!this.api && !!this.cursor && !this.busy && !this.networkBlocked; }
   private lastHistorySync: number = 0;
   private lastProbe: number = 0;
   private sessionVersion: number = 0;
@@ -178,21 +272,27 @@ export class AppStore {
   }
   async clearCache(): Promise<void> {
     if (this.cacheBusy) { return; }
-    this.cacheBusy = true; this.cacheEpoch++;
+    this.cacheBusy = true; this.cacheEpoch++; this.draftRevision++; this.draftDirty = false;
+    if (this.draftTimer >= 0) { clearTimeout(this.draftTimer); this.draftTimer = -1; }
     try { await this.transcriptCache.clear(); this.cacheBytes = 0; this.cacheNotice = '已清空本机缓存，服务器历史仍然保留'; }
     catch (_) { this.cacheNotice = '缓存未清理完成，请重试'; }
     finally { this.cacheBusy = false; }
   }
   private async restoreOffline(config: ServerConfig, generation: number): Promise<void> {
-    const epoch = this.cacheEpoch;
+    const epoch = this.cacheEpoch; const revision = this.draftRevision;
     try {
       const position = await this.storage.last(config.id);
       if (position.length < 2) { return; }
-      const snapshot = await this.transcriptCache.load(config, position[0], position[1]);
-      if (!snapshot || generation !== this.generation || epoch !== this.cacheEpoch || this.networkBlocked) { return; }
+      let snapshot: TranscriptSnapshot | undefined = undefined; let text = '';
+      try { snapshot = await this.transcriptCache.load(config, position[0], position[1]); } catch (_) {}
+      try { text = await this.textDraftStore.loadDraft(config, position[0], position[1]); } catch (_) {}
+      if ((!snapshot && !text) || generation !== this.generation || epoch !== this.cacheEpoch || this.networkBlocked) { return; }
       this.connected = config.id; this.directory = position[0]; this.sessionID = position[1];
-      this.messages = boundMessageAttachments(snapshot.messages); this.cursor = snapshot.cursor; this.tailLoaded = true;
+      this.messages = snapshot ? boundMessageAttachments(snapshot.messages) : []; this.cursor = snapshot?.cursor || ''; this.tailLoaded = true;
       this.interactions = []; this.cacheRestored = true; this.status = '离线缓存'; this.sessionTitle = '缓存会话';
+      if (text && revision === this.draftRevision && !this.draft && !this.pendingSend) {
+        this.draft = text; this.draftRestored = true; this.draftNotice = '已恢复本机文本草稿 · 附件需重新选择';
+      }
     } catch (_) {}
   }
   private async restoreTranscript(generation: number): Promise<void> {
@@ -313,7 +413,8 @@ export class AppStore {
   private fail(error: Error): void {
     this.error = error.message || '操作失败，请重新连接';
     if (error instanceof ApiError && [401, 403, 495].indexOf(error.code) >= 0) {
-      this.cacheEpoch++;
+      this.resetBookmarks(); this.cacheEpoch++; this.draftNotice = '';
+      if (this.draftRestored) { this.draft = ''; this.draftNotice = ''; this.draftRestored = false; }
       const config = this.api?.config;
       if (config) { this.transcriptCache.removeServer(config).then((): void => { this.refreshCacheSize(); }).catch((): void => {}); }
       if (this.cacheRestored) { this.messages = []; this.cacheRestored = false; }
@@ -323,6 +424,7 @@ export class AppStore {
     }
   }
   private stashConversation(): boolean {
+    this.flushTextDraft();
     if (!this.connected || !this.sessionID) { return true; }
     try { this.conversationMemory.save(this.connected, this.directory, this.sessionID, this.draft, this.pendingSend, this.questionDrafts(), this.attachments); return true; }
     catch (e) { this.fail(e as Error); return false; }
@@ -718,12 +820,13 @@ export class AppStore {
   }
   disconnect(): boolean {
     if (!this.stashConversation()) { return false; }
+    this.resetBookmarks(); this.bookmarkServerID = '';
     this.pendingEpoch++; this.sessionsEpoch++; this.preferenceEpoch++; this.pendingItems = []; this.pendingError = ''; this.pendingUpdated = 0; this.pendingBusy = false;
     this.sessionCursor = ''; this.sessionQuery = ''; this.sessionsBusy = false; this.sessionsError = ''; this.sessionPreferences = [];
     this.sessionMutationBusy = false; this.sessionPreferenceBusy = false; this.runningSessions = []; this.runningUnknown = false; this.showArchived = false;
     this.cancelExport(); this.agentEpoch++; this.agents = []; this.agentID = ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.providers.attach(undefined, '', async (): Promise<void> => {});
-    this.cacheRestored = false; this.lastHistorySync = 0; this.lastProbe = 0;
+    this.cacheRestored = false; this.lastHistorySync = 0; this.lastProbe = 0; this.draftRevision++; this.draftDirty = false; this.draftRestored = false; this.draftNotice = '';
     this.clearTimeline(); this.generation++; this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false; this.networkBlocked = false; this.stopNetwork(); this.api = undefined; this.connected = ''; this.status = '未连接'; this.modelVariant = ''; this.modelPreferenceEpoch++; this.modelPreferences = emptyModelPreferences(); this.modelPreferencesBusy = false; this.modelPreferencesError = '';
     this.projects = []; this.sessions = []; this.models = []; this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++;
     this.diffs = []; this.files = []; this.fileContent = ''; this.filePath = ''; this.directory = '';
@@ -735,7 +838,7 @@ export class AppStore {
     this.reminderQuiet = ''; this.reminderQuietSeq = 0; return true;
   }
   async connect(config: ServerConfig): Promise<number | undefined> {
-    if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true; let ownedGeneration = generation;
+    if (!this.disconnect()) { return; } this.bookmarkServerID = config.id; this.refreshBookmarks(); const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true; let ownedGeneration = generation;
     try {
       const password = await this.storage.secret(config.id);
       if (generation !== this.generation) { return; }
@@ -780,7 +883,7 @@ export class AppStore {
     } catch (e) { if (generation === this.generation) {
       this.status = '连接失败'; this.fail(e as Error);
       if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) {
-        this.cacheEpoch++; try { await this.transcriptCache.removeServer(config); this.refreshCacheSize(); } catch (_) {}
+        this.resetBookmarks(); this.cacheEpoch++; try { await this.transcriptCache.removeServer(config); this.refreshCacheSize(); } catch (_) {}
       } else { await this.restoreOffline(config, generation); }
     } }
     finally { if (generation === this.generation) { this.busy = false; } }
@@ -796,6 +899,7 @@ export class AppStore {
     if (this.refreshTimer >= 0) { clearTimeout(this.refreshTimer); this.refreshTimer = -1; }
   }
   setActive(active: boolean): void {
+    if (!active) { this.flushTextDraft(); }
     if (active && !this.foreground) { this.suppressNotificationCatchUp(); }
     this.active = active; this.providers.setActive(active); this.foreground = active;
     if (!active) {
@@ -921,6 +1025,7 @@ export class AppStore {
     this.cancelExport(); this.agentEpoch++; this.agentID = session.agent || ''; this.agentError = ''; this.agentBusy = false; this.agentLoading = false; this.agentUncertain = false;
     this.clearTimeline(); this.generation++; this.streamClose?.(); this.syncing = false; this.syncAgain = false;
     this.transcriptEpoch++; this.readingHistory = false; this.newerAvailable = false;
+    this.draftRevision++; this.draftDirty = false; this.draftRestored = false; this.draftNotice = '';
     this.cacheRestored = false; this.lastHistorySync = 0; this.lastProbe = 0; this.sessionVersion = 0; this.probeEpoch++; this.probeBusy = false;
     this.sessionID = session.id; this.sessionTitle = session.title; this.modelID = session.model; this.modelVariant = session.variant || ''; this.resetSessionControl(); this.parentSessionID = session.parentID || ''; this.branchBoundary = session.forkType === 'before' ? '所选消息之前' : session.forkType === 'through' ? '创建分叉时的最后一条消息' : '';
     // Existing history and pending items are seeded on the first sync; they are
@@ -929,7 +1034,10 @@ export class AppStore {
     this.messages = []; this.interactions = []; this.permissionError = ''; this.permissionEpoch++; this.diffs = []; this.cursor = ''; this.tailLoaded = false; this.pendingSend = undefined;
     const saved = this.conversationMemory.read(this.connected, this.directory, session.id);
     this.draft = saved.text; this.attachments = saved.files || []; this.pendingSend = saved.pending; this.working = false; this.interrupting = false; this.pane = 'chat'; this.error = ''; this.savePosition(); this.openStream(); this.queueWorkspace();
+    if (saved.text && !saved.pending) { this.updateDraft(saved.text); }
     const generation = this.generation; this.busy = true; await this.restoreTranscript(generation);
+    if (generation !== this.generation) { return; }
+    await this.restoreTextDraft(generation);
     if (generation !== this.generation) { return; }
     await this.sync(); if (generation === this.generation) { this.busy = false; }
   }
@@ -1108,7 +1216,7 @@ export class AppStore {
   }
 
   async send(): Promise<void> {
-    if (!this.api || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy || ['queued', 'running', 'submitting'].indexOf(this.compaction.state) >= 0 || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
+    if (!this.api || this.networkBlocked || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentUncertain || this.forkBusy || this.compactionBusy || ['queued', 'running', 'submitting'].indexOf(this.compaction.state) >= 0 || (!this.draft.trim() && !this.attachments.length && !this.pendingSend)) { return; }
     const pending: PendingPrompt = this.pendingSend || {
       id: 'msg_' + Date.now().toString(36) + Math.random().toString(36).slice(2),
       sessionID: this.sessionID, text: this.draft.trim(), files: this.attachments.map((a: Attachment): Attachment => ({ id: a.id, name: a.name, mime: a.mime, data: a.data, size: a.size }))
@@ -1117,6 +1225,8 @@ export class AppStore {
     if (problem) { this.error = problem; return; }
     this.pendingSend = pending; const generation = this.generation; this.busy = true; this.error = '';
     try {
+      await this.flushTextDraft(true);
+      if (generation !== this.generation || this.networkBlocked || !this.api) { return; }
       await this.api.request(this.sessionPath() + '/prompt', http.RequestMethod.POST,
         { id: pending.id, text: pending.text, delivery: 'steer', resume: true, files: pending.files?.length ? promptFiles(pending.files) : undefined } as PromptRequest);
       if (generation !== this.generation) { return; }
@@ -1125,7 +1235,7 @@ export class AppStore {
       if (generation === this.generation) {
         this.fail(e as Error);
         if (e instanceof ApiError && [400, 401, 403, 404, 405, 413, 422, 495].indexOf(e.code) >= 0) {
-          this.pendingSend = undefined; this.draft = pending.text; this.attachments = pending.files || []; this.stashConversation();
+          this.pendingSend = undefined; this.draft = pending.text; this.attachments = pending.files || []; this.draftDirty = true; this.stashConversation();
         } else { this.error += '。发送结果待核对，重试将使用同一消息 ID'; }
       }
     } finally { if (generation === this.generation) { this.busy = false; } }
@@ -1266,7 +1376,7 @@ export class AppStore {
     finally { if (generation === this.generation) { this.agentLoading = false; } }
   }
   async chooseAgent(id: string): Promise<boolean> {
-    if (!this.api || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentLoading || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
+    if (!this.api || this.networkBlocked || !this.sessionID || this.busy || this.modelBusy || this.modelUncertain || this.agentBusy || this.agentLoading || this.agentUncertain || this.forkBusy || this.compactionBusy) { return false; }
     if (id === this.agentID) { return true; }
     if (!this.agents.some((a: AgentItem) => a.id === id)) { this.agentError = '请从当前服务器的可用 Agent 中选择'; return false; }
     if (this.working || this.pendingSend || this.interactions.length || this.permissionError) { this.agentError = '请先结束当前任务并处理问题或审批，再切换 Agent'; return false; }

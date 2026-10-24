@@ -1,6 +1,6 @@
 {
   "name": "opencode-harmony-checks",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "private": true,
   "description": "Portable logic and web checks for OpenCode Harmony",
   "license": "Apache-2.0",

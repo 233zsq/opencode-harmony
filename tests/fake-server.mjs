@@ -1,3 +1,4 @@
+import {previewPdf,previewPng} from './helpers/preview-fixtures.mjs';
 // Local test fixture, not an OpenCode implementation or a production backend.
 import http from 'node:http';
 import { randomUUID, createHash } from 'node:crypto';
@@ -84,6 +85,14 @@ async function runPrompt(text) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const path = url.pathname;
+  if (path === '/__test/preview-history' && req.method==='POST') {
+    messages.splice(0,messages.length,{id:'preview_user',type:'user',text:'NATIVE_PREVIEW_FIXTURE',files:[
+      {name:'native-preview.png',mime:'image/png',data:previewPng().toString('base64')},
+      {name:'native-preview.pdf',mime:'application/pdf',data:previewPdf().toString('base64')},
+      {name:'native-preview.txt',mime:'text/plain',data:Buffer.from('NATIVE_PREVIEW_TEXT').toString('base64')}],time:{created:1}},
+      {id:'preview_reply',type:'assistant',content:[{type:'text',text:'NATIVE_BOOKMARK_BODY'}, {type:'reasoning',text:'PRIVATE_REASONING_NOT_BOOKMARKED'}],time:{created:2,completed:3}});
+    session.title='消息收藏与附件预览验收';session.outcome='succeeded';forms.splice(0);permissions.splice(0);active=false;return send(res,{ready:true});
+  }
   if (path === '/__test/cache-history' && req.method==='POST') {
     messages.splice(0, messages.length,
       {id:'cache_native_user',type:'user',text:'NATIVE_CACHE_PERSISTENCE_FIXTURE',

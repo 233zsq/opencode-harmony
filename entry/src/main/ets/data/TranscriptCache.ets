@@ -1,12 +1,13 @@
+import { MessageBookmark, MessageBookmarkPort, parseBookmark } from '../domain/MessageBookmarks';
 import { common } from '@kit.AbilityKit';
 import { relationalStore } from '@kit.ArkData';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { Attachment } from '../domain/Attachments';
-import { ServerConfig, ChatMessage, TranscriptSnapshot, TranscriptCachePort } from '../domain/Core';
+import { ServerConfig, ChatMessage, TranscriptSnapshot, TranscriptCachePort, TextDraftPort } from '../domain/Core';
 
 interface CacheEntry { body: string; }
-export class TranscriptCache implements TranscriptCachePort {
+export class TranscriptCache implements TranscriptCachePort, TextDraftPort, MessageBookmarkPort {
   private db: relationalStore.RdbStore | undefined = undefined;
   private queue: Promise<void> = Promise.resolve();
   private encoder: util.TextEncoder = new util.TextEncoder();
@@ -18,6 +19,8 @@ export class TranscriptCache implements TranscriptCachePort {
     });
     await this.db.executeSql('CREATE TABLE IF NOT EXISTS entries (key TEXT PRIMARY KEY, server TEXT NOT NULL, body TEXT NOT NULL, bytes INTEGER NOT NULL, touched INTEGER NOT NULL)');
     await this.db.executeSql('CREATE INDEX IF NOT EXISTS cache_lru ON entries(touched)');
+    await this.db.executeSql('CREATE TABLE IF NOT EXISTS bookmarks (key TEXT PRIMARY KEY, server TEXT NOT NULL, body TEXT NOT NULL, saved INTEGER NOT NULL)');
+    await this.db.executeSql('CREATE INDEX IF NOT EXISTS bookmark_scope ON bookmarks(server,saved DESC,key)');
   }
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.queue.then(operation);
@@ -111,6 +114,25 @@ export class TranscriptCache implements TranscriptCachePort {
       await this.trim();
     });
   }
+  loadDraft(config: ServerConfig, directory: string, id: string): Promise<string> {
+    return this.serial(async (): Promise<string> => {
+      const key = 'draft:' + await this.key(config, directory, id); const row = await this.read(key);
+      if (!row) { return ''; }
+      try { const value = JSON.parse(row.body) as string; if (typeof value === 'string' && value.length <= 20000) { return value; } } catch (_) {}
+      await this.db?.executeSql('DELETE FROM entries WHERE key=?', [key]); return '';
+    });
+  }
+  saveDraft(config: ServerConfig, directory: string, id: string, text: string): Promise<void> {
+    return this.serial(async (): Promise<void> => {
+      if (!this.db) { throw new Error('加密草稿存储尚未就绪'); }
+      if (text.length > 20000) { throw new Error('文本草稿最多 20000 字符'); }
+      const key = 'draft:' + await this.key(config, directory, id);
+      if (!text.trim()) { await this.db?.executeSql('DELETE FROM entries WHERE key=?', [key]); return; }
+      await this.write(key, await this.server(config), JSON.stringify(text));
+      await this.db?.executeSql("DELETE FROM entries WHERE key IN (SELECT key FROM entries WHERE key LIKE 'draft:%' ORDER BY touched DESC,key LIMIT -1 OFFSET 100)");
+      await this.trim();
+    });
+  }
   file(config: ServerConfig, hash: string): Promise<string> {
     return this.serial(async (): Promise<string> => {
       if (!/^[a-f0-9]{64}$/.test(hash)) { return ''; }
@@ -124,9 +146,36 @@ export class TranscriptCache implements TranscriptCachePort {
       await this.write(scope + ':blob:' + hash, scope, data); await this.trim();
     });
   }
+  bookmarks(config: ServerConfig): Promise<MessageBookmark[]> {
+    return this.serial(async (): Promise<MessageBookmark[]> => {
+      if (!this.db) { throw new Error('加密收藏存储尚未就绪'); }
+      const rows = await this.db.querySql('SELECT body FROM bookmarks WHERE server=? ORDER BY saved DESC,key LIMIT 101', [await this.server(config)]);
+      const result: MessageBookmark[] = [];
+      try { if (rows.goToFirstRow()) { do { result.push(parseBookmark(rows.getString(0))); } while (rows.goToNextRow()); } } finally { rows.close(); }
+      if (result.length > 100) { throw new Error('收藏数量超出范围'); } return result;
+    });
+  }
+  saveBookmark(config: ServerConfig, item: MessageBookmark): Promise<void> {
+    const copy = parseBookmark(JSON.stringify(item));
+    return this.serial(async (): Promise<void> => {
+      if (!this.db) { throw new Error('加密收藏存储尚未就绪'); }
+      const server = await this.server(config); const key = await this.hash(JSON.stringify([server, copy.id]));
+      const rows = await this.db.querySql('SELECT COUNT(*) FROM bookmarks WHERE server=? AND key<>?', [server, key]);
+      let count = 0; try { if (rows.goToFirstRow()) { count = rows.getLong(0); } } finally { rows.close(); }
+      if (count >= 100) { throw new Error('最多收藏 100 条消息，请先移除不再需要的收藏'); }
+      await this.db.executeSql('INSERT OR REPLACE INTO bookmarks(key,server,body,saved) VALUES(?,?,?,?)', [key, server, JSON.stringify(copy), copy.savedAt]);
+    });
+  }
+  removeBookmark(config: ServerConfig, id: string): Promise<void> {
+    return this.serial(async (): Promise<void> => {
+      if (!this.db) { throw new Error('加密收藏存储尚未就绪'); }
+      const server = await this.server(config); await this.db.executeSql('DELETE FROM bookmarks WHERE key=? AND server=?', [await this.hash(JSON.stringify([server, id])), server]);
+    });
+  }
   removeServer(config: ServerConfig): Promise<void> {
     return this.serial(async (): Promise<void> => {
-      await this.db?.executeSql('DELETE FROM entries WHERE server=?', [await this.server(config)]);
+      const server = await this.server(config);
+      await this.db?.executeSql('DELETE FROM entries WHERE server=?', [server]);
     });
   }
   size(): Promise<number> { return this.serial((): Promise<number> => this.bytes()); }

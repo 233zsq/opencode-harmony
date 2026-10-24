@@ -35,6 +35,8 @@ function load(file, key) {
   modules.set(key, exports);
   return exports;
 }
+load('entry/src/main/ets/domain/MessageBookmarks.ts', '../domain/MessageBookmarks');
+load('entry/src/main/ets/domain/PromptTemplates.ts', '../domain/PromptTemplates');
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
 modules.set('./Core', modules.get('../domain/Core'));
@@ -373,8 +375,8 @@ await test('switching conversations restores unsent text and the same uncertain 
  store.disconnect();store.connected='two';store.directory='/repo';store.api={};await store.openSession(workspaceSession('a'));assert.equal(store.draft,'');assert.equal(store.pendingSend,undefined);
 });
 await test('a late send acknowledgement cannot clear another conversations draft or leave it busy',async()=>{
- const store=new AppStore();store.connected='one';store.directory='/repo';store.active=false;store.sessionID='a';store.draft='A';let release;
- store.api={request:()=>new Promise(r=>release=r)};const send=store.send();await store.openSession(workspaceSession('b'));store.draft='B';release({});await send;
+ const store=new AppStore();store.connected='one';store.directory='/repo';store.active=false;store.sessionID='a';store.draft='A';let release,enter;const entered=new Promise(resolve=>enter=resolve);
+ store.api={request:()=>{enter();return new Promise(r=>release=r);}};const send=store.send();await entered;await store.openSession(workspaceSession('b'));store.draft='B';release({});await send;
  assert.equal(store.sessionID,'b');assert.equal(store.draft,'B');assert.equal(store.busy,false);await store.openSession(workspaceSession('a'));assert.equal(store.pendingSend.text,'A');
 });
 await test('local archive/pin saves no API mutations and failed preferences retain visible state',async()=>{
@@ -774,4 +776,132 @@ await test('a delayed disk read after navigation cannot launch an obsolete attac
  t.store.api.historyFile=async()=>{downloads++;return file;};
  const pending=t.store.attachmentPreview(file);t.store.generation++;release('');await pending;assert.equal(downloads,0);
 });
+await test('text drafts save only text and keep their immutable original session scope',async()=>{
+ const t=trafficStore();let saved;t.store.connected='a';t.store.attachDraftStore({saveDraft:async(...args)=>saved=args,loadDraft:async()=>''});
+ t.store.updateDraft('draft text');await t.store.flushTextDraft();assert.equal(saved[0].username,'owner');assert.deepEqual(saved.slice(1),['/repo','ses_a','draft text']);assert.equal(t.store.pendingSend,undefined);
+});
+await test('restored encrypted drafts never send automatically or restore attachments',async()=>{
+ const t=trafficStore();t.store.attachDraftStore({loadDraft:async()=> 'saved text',saveDraft:async()=>{throw Error('unexpected write');}});
+ await t.store.restoreTextDraft(0);assert.equal(t.store.draft,'saved text');assert.equal(t.store.attachments.length,0);assert.equal(t.store.pendingSend,undefined);assert.match(t.store.draftNotice,/已恢复/);assert.equal(t.pages(),0);
+});
+await test('late draft reads cannot replace user typing or another session',async()=>{
+ for(const change of [store=>store.updateDraft('typed now'),store=>{store.generation++;store.sessionID='other';}]){
+  const t=trafficStore();let release;t.store.attachDraftStore({loadDraft:()=>new Promise(resolve=>release=resolve),saveDraft:async()=>{}});
+  const reading=t.store.restoreTextDraft(0);change(t.store);release('old text');await reading;assert.notEqual(t.store.draft,'old text');
+ }
+});
+await test('auth failure and explicit cache clearing invalidate outstanding draft restores',async()=>{
+ for(const clear of [store=>store.fail(new protocol.ApiError(401,'rejected')),store=>store.clearCache()]){
+  const t=trafficStore();let release;t.store.attachDraftStore({loadDraft:()=>new Promise(resolve=>release=resolve),saveDraft:async()=>{}});
+  const reading=t.store.restoreTextDraft(0);await clear(t.store);release('old private');await reading;assert.equal(t.store.draft,'');
+ }
+});
+await test('sending clears the persisted text before posting and pending messages are not autosaved',async()=>{
+ const t=trafficStore(),order=[];t.store.modelID='model';t.store.updateDraft('prompt');
+ t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async(_c,_d,_s,text)=>order.push('draft:'+text)});
+ const request=t.store.api.request;t.store.api.request=async(path,method,body)=>{if(path.endsWith('/prompt'))order.push('post:'+body.text);return request(path);};
+ await t.store.send();assert.deepEqual(order.slice(0,2),['draft:','post:prompt']);assert.equal(t.store.draft,'');
+ t.store.pendingSend={id:'pending',sessionID:'ses_a',text:'uncertain'};t.store.updateDraft('uncertain');await t.store.flushTextDraft();assert.equal(order.length,2);
+});
+await test('background transition flushes text and cache errors do not prevent an online send',async()=>{
+ const t=trafficStore();let saved='';t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async(_c,_d,_s,text)=>{saved=text;}});
+ t.store.updateDraft('background text');t.store.setActive(false);await Promise.resolve();assert.equal(saved,'background text');
+ t.store.api.stream=()=>()=>{};t.store.setActive(true);t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async()=>{throw Error('disk full');}});
+ let posted=false;t.store.api.request=async(path)=>{if(path.endsWith('/prompt'))posted=true;return{data:{}};};await t.store.send();assert.equal(posted,true);
+});
+await test('auth rejection removes an unchanged restored draft but preserves newly typed local text',async()=>{
+ for(const edit of [false,true]){
+  const t=trafficStore();t.store.attachDraftStore({loadDraft:async()=> 'private cached',saveDraft:async()=>{}});await t.store.restoreTextDraft(0);
+  if(edit)t.store.updateDraft('new unsent');t.store.fail(new protocol.ApiError(401,'rejected'));
+  assert.equal(t.store.draft,edit?'new unsent':'');
+ }
+});
+await test('unavailable native storage never claims a draft was saved',async()=>{
+ const t=trafficStore();t.store.updateDraft('unsaved');await t.store.flushTextDraft();assert.match(t.store.draftNotice,/未能保存/);assert.ok(!t.store.draftNotice.includes('已加密保存'));
+});
+await test('offline text draft recovery is independent of an evicted transcript snapshot',async()=>{
+ const t=trafficStore();t.store.api=undefined;t.store.storage.last=async()=>['/repo','ses_a'];
+ t.store.attachDraftStore({loadDraft:async()=> 'draft without history',saveDraft:async()=>{}});
+ await t.store.restoreOffline({id:'a',url:'https://cache.example',username:'owner'},0);
+ assert.equal(t.store.draft,'draft without history');assert.equal(t.store.sessionID,'ses_a');assert.equal(t.store.messages.length,0);assert.equal(t.store.cacheRestored,true);assert.equal(t.store.canSendMessages(),false);
+});
+await test('known authentication failure disables sending without creating an uncertain request',async()=>{
+ const t=trafficStore();t.store.networkBlocked=true;t.store.updateDraft('keep text');t.store.api.request=async()=>{throw Error('must not send');};
+ assert.equal(t.store.canSendMessages(),false);await t.store.send();assert.equal(t.store.pendingSend,undefined);assert.equal(t.store.draft,'keep text');
+});
+await test('inserting a template preserves existing text and attachments without a server request',async()=>{
+ const t=trafficStore();t.store.draft='Existing instruction';const file={id:'file',name:'a.txt',data:'YWJj',mime:'text/plain',size:3};t.store.attachments=[file];
+ let requests=0;t.store.api.request=async()=>{requests++;return{};};
+ assert.equal(t.store.insertPromptTemplate('Review this code'),true);
+ assert.equal(t.store.draft,'Existing instruction\n\nReview this code');assert.equal(t.store.attachments[0],file);assert.equal(requests,0);assert.equal(t.store.pendingSend,undefined);
+ let saved='';t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async(_c,_d,_s,text)=>{saved=text;}});await t.store.flushTextDraft();assert.equal(saved,t.store.draft);
+});
+await test('template insertion never truncates an oversized combined draft',async()=>{
+ const t=trafficStore();t.store.draft='x'.repeat(19999);assert.equal(t.store.insertPromptTemplate('extra'),false);assert.equal(t.store.draft.length,19999);assert.match(t.store.error,/20000/);
+});
+await test('template insertion cannot overwrite a pending request or a busy or absent conversation',async()=>{
+ for(const kind of ['pending','busy','absent']){const t=trafficStore();t.store.draft='keep';if(kind==='pending')t.store.pendingSend={id:'p',sessionID:'s',text:'pending'};if(kind==='busy')t.store.busy=true;if(kind==='absent')t.store.sessionID='';assert.equal(t.store.insertPromptTemplate('template'),false);assert.equal(t.store.draft,'keep');}
+});
+await test('offline template insertion remains a local editable draft and cannot send',async()=>{
+ const t=trafficStore();t.store.status='离线缓存';t.store.api=undefined;
+ assert.equal(t.store.insertPromptTemplate('offline text'),true);assert.equal(t.store.draft,'offline text');assert.equal(t.store.canSendMessages(),false);
+});
+
+function bookmarkStoreFixture(t=trafficStore()){const items=[];t.store.attachBookmarkStore({bookmarks:async()=>items.slice(),saveBookmark:async(_config,item)=>{items.push(item);},removeBookmark:async(_config,id)=>{const index=items.findIndex(x=>x.id===id);if(index>=0)items.splice(index,1);}});return{...t,items};}
+await test('bookmark toggle stores a snapshot, keeps the composer and makes no network request',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();t.store.draft='keep';const msg={...message('m','bookmark body'),files:[],role:'assistant'};let calls=0;t.store.api.request=async()=>{calls++;return{};};
+ assert.equal(await t.store.toggleBookmark(msg),true);msg.text='later';assert.equal(t.items[0].text,'bookmark body');assert.equal(t.store.isBookmarked('m'),true);assert.equal(t.store.draft,'keep');assert.equal(calls,0);assert.equal(await t.store.toggleBookmark(msg),true);assert.equal(t.items.length,0);
+});
+await test('failed bookmark writes retain the visible collection and allow explicit retry',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();t.store.bookmarkStore.saveBookmark=async()=>{throw Error('full');};assert.equal(await t.store.toggleBookmark(message('m','body')),false);assert.equal(t.store.bookmarks.length,0);assert.equal(t.store.bookmarkSaving,false);assert.match(t.store.bookmarkError,/full/);
+});
+await test('late bookmark reads cannot cross account changes or authentication rejection',async()=>{
+ for(const change of [store=>store.disconnect(),store=>store.fail(new protocol.ApiError(401,'rejected'))]){const t=bookmarkStoreFixture();let release;t.store.bookmarkStore.bookmarks=()=>new Promise(r=>release=r);const loading=t.store.refreshBookmarks();change(t.store);release([{id:'private'}]);await loading;assert.equal(t.store.bookmarks.length,0);assert.equal(t.store.bookmarksReady,false);}
+});
+await test('late saved bookmark cannot repopulate a disconnected account',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();let release;t.store.bookmarkStore.saveBookmark=()=>new Promise(r=>release=r);const saving=t.store.toggleBookmark(message('m','private'));assert.equal(t.store.bookmarkSaving,true);t.store.disconnect();release();assert.equal(await saving,false);assert.equal(t.store.bookmarks.length,0);
+});
+await test('bookmark reads from a changed URL or username never retain the old account list',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();await t.store.toggleBookmark(message('m','body'));const old=t.store.bookmarkConfig();const changed={...old,username:'another'};t.store.servers=[changed];t.store.connected=changed.id;let release;t.store.bookmarkStore.bookmarks=()=>new Promise(r=>release=r);const loading=t.store.refreshBookmarks();assert.equal(t.store.bookmarks.length,0);release([]);await loading;assert.equal(t.store.isBookmarked('m'),false);
+});
+await test('missing encrypted bookmark storage never reports a successful collection',async()=>{const t=trafficStore();await t.store.refreshBookmarks();assert.equal(t.store.bookmarksReady,false);assert.ok(t.store.bookmarkError);assert.equal(await t.store.toggleBookmark(message('m','text')),false);});
+await test('confirmed V2 user messages without a completed timestamp can be bookmarked',async()=>{const t=bookmarkStoreFixture();await t.store.refreshBookmarks();const api=new protocol.Protocol({url:'https://fixture.example',username:'owner'},'');const item=api.parseMessages({data:[{id:'user-saved',type:'user',text:'Saved user request',time:{created:1}}]})[0];assert.equal(item.role,'user');assert.equal(await t.store.toggleBookmark(item),true);assert.equal(t.store.bookmarks[0].text,'Saved user request');});
+
+function bookmarkModelFixture(){
+ const t=modelControlStore(),config={id:'model-server',name:'Fixture',url:'https://bookmarks.example',username:'owner',allowHttp:false};
+ t.store.servers=[config];t.store.api.config=config;return bookmarkStoreFixture(t);
+}
+async function pendingBookmark(t,operation){
+ await t.store.refreshBookmarks();const msg=message('concurrent-bookmark','Saved during model selection');
+ if(operation!=='save')await t.store.toggleBookmark(msg);
+ if(operation==='read'){t.store.bookmarks=[];t.store.bookmarksReady=false;}
+ const method={read:'bookmarks',save:'saveBookmark',remove:'removeBookmark'}[operation];
+ const original=t.store.bookmarkStore[method];let release;const gate=new Promise(resolve=>release=resolve);
+ t.store.bookmarkStore[method]=async(...args)=>{await gate;return original(...args);};
+ const pending=operation==='read'?t.store.refreshBookmarks():operation==='save'?t.store.toggleBookmark(msg):t.store.removeMessageBookmark(t.items[0].id);
+ return{pending,release};
+}
+for(const operation of ['save','read','remove'])await test('bookmark '+operation+' accepts a same-account config replacement from a real model change',async()=>{
+ const t=bookmarkModelFixture(),before=t.store.bookmarkConfig(),{pending,release}=await pendingBookmark(t,operation);
+ assert.equal(await t.store.chooseModel('p/other'),true);assert.notEqual(t.store.bookmarkConfig(),before);
+ assert.equal(t.store.bookmarkAccount(t.store.bookmarkConfig()),t.store.bookmarkAccount(before));
+ release();const result=await pending;
+ assert.equal(t.items.length,operation==='remove'?0:1,'The underlying bookmark operation completed');
+ if(operation!=='read')assert.equal(result,true,'Persisted bookmark results must be acknowledged by the UI');
+ assert.equal(t.store.bookmarks.length,operation==='remove'?0:1);assert.equal(t.store.isBookmarked('concurrent-bookmark'),operation!=='remove');
+ assert.equal(t.store.bookmarksReady,true);assert.equal(t.store.bookmarksBusy,false);assert.equal(t.store.bookmarkSaving,false);assert.equal(t.store.bookmarkError,'');
+});
+await test('pending bookmark results still reject changed URL, username, authentication and connection lifecycle',async()=>{
+ const changes=[
+  store=>{store.servers=store.servers.map(c=>({...c,url:'https://another.example'}));},
+  store=>{store.servers=store.servers.map(c=>({...c,username:'another'}));},
+  store=>store.fail(new protocol.ApiError(401,'rejected')),
+  store=>{const config=store.bookmarkConfig();store.disconnect();store.servers=[{...config}];store.connected=config.id;}
+ ];
+ for(const operation of ['save','read','remove'])for(const change of changes){
+  const t=bookmarkModelFixture(),{pending,release}=await pendingBookmark(t,operation);change(t.store);const visible=JSON.stringify(t.store.bookmarks);
+  release();const result=await pending;if(operation!=='read')assert.equal(result,false);assert.equal(JSON.stringify(t.store.bookmarks),visible,'Stale work cannot publish into another account or lifecycle');
+ }
+});
+
 console.log(count + ' adapter/state tests passed.');

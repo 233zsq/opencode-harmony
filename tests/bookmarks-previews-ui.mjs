@@ -1,0 +1,38 @@
+// Named loopback fixture only. No model prompts, uploads or source attachment mutations.
+import assert from 'node:assert/strict';
+import {find,wait,tap,input,menu,back,pause,shot,cmd,reveal,layout} from './native-driver.mjs';
+const endpoint='http://127.0.0.1:4216',mode=process.argv[2]||'preview';
+const state=async()=>await(await fetch(endpoint+'/__test/state')).json();
+async function root(){for(let i=0;i<5;i++){if(find('native-back')||find('more-functions-page'))await back();else break;}await wait('chat-input');}
+if(mode==='preview'){
+ await root();await fetch(endpoint+'/__test/preview-history',{method:'POST'});await menu('项目与会话');if(!find('session-ses_fixture')){await tap(await reveal('Harmony Fixture'));await pause(900);}await tap(await reveal('session-ses_fixture'));await wait('chat-input');
+ await tap(await reveal('attachment-open-preview_user-file-0'));await wait('attachment-preview-image');await tap(await reveal('attachment-zoom-in'));assert.equal(find('attachment-zoom-level').text,'150%');await tap('attachment-zoom-reset');assert.equal(find('attachment-zoom-level').text,'100%');await shot('attachment-image-zoom-native');await back();
+ await tap(await reveal('attachment-open-preview_user-file-1'));await wait('attachment-pdf-preview');
+ const end=Date.now()+15000;while(!find('attachment-pdf-page')&&!find('attachment-pdf-error')&&Date.now()<end)await pause(300);
+ if(find('attachment-pdf-page')){assert.equal(find('attachment-pdf-page').text,'1 / 2');await shot('attachment-pdf-page-one-native');await tap(await reveal('attachment-pdf-next'));await wait('2 / 2');await tap('attachment-pdf-previous');await wait('1 / 2');console.log('PASS native PDF two-page rendering');}
+ else{assert.equal(process.env.ALLOW_UNSUPPORTED_PDF,'1','Native PDF support required unless this emulator limitation is explicitly accepted');assert.match(find('attachment-pdf-error')?.text||'',/此设备暂不支持/);assert.equal(find('attachment-save').enabled,'true');console.log('SKIP PDF rendering: emulator lacks PDF service; explicit fallback and save availability passed');await shot('attachment-pdf-unsupported-native');}await back();
+ await tap(await reveal('bookmark-message-preview_reply'));await menu('消息收藏');await wait('bookmark-search');await input('bookmark-search','NATIVE_BOOKMARK_BODY');await tap('bookmark-item-0');await wait('bookmark-detail');assert.ok(find('NATIVE_BOOKMARK_BODY'));assert.ok(!find('PRIVATE_REASONING_NOT_BOOKMARKED'));await shot('message-bookmark-native');
+ await tap('bookmark-context');await wait('chat-input');await wait('NATIVE_BOOKMARK_BODY');assert.equal((await state()).receipts.length,0);console.log('PASS native image zoom/reset, PDF support handling, encrypted message favorite, detail exclusion and original-session navigation; no model submission');
+}else if(mode==='user'){
+ await root();await tap(await reveal('bookmark-message-preview_user'));await menu('消息收藏');await input('bookmark-search','native-preview.pdf');await tap('bookmark-item-0');await wait('bookmark-detail');await wait('附件 · native-preview.pdf');await root();await tap(await reveal('bookmark-message-preview_user'));console.log('PASS native own-message star, searchable attachment metadata and removing only that favorite');
+}else if(mode==='composer'){
+ await root();const baseline=find('chat-input').text||'';assert.equal(baseline.split('NATIVE_PREVIEW_KEEP_DRAFT').join(''),'','Only use a synthetic fixture draft');if(!baseline)await input('chat-input','NATIVE_PREVIEW_KEEP_DRAFT');const draftText=find('chat-input').text;
+ const controls=()=>layout().filter(n=>n.visible!=='false'&&n.id?.startsWith('attachment-open-att_'));
+ assert.equal(controls().length,0,'Only use an empty fixture composer');
+ for(const name of ['ocp24.png','ocp24.pdf']){
+  await tap('attachment-add');await tap('attachment-files');await pause(500);
+  if(!find(name)){if(!find('我的手机')&&!find('Download'))await tap('浏览');if(!find('Download'))await tap('我的手机');await tap('Download');}
+  await tap(name);await pause(500);if(find('完成'))await tap('完成');const deadline=Date.now()+20000;while(find('attachment-add')?.enabled!=='true'&&Date.now()<deadline)await pause(400);assert.equal(find('attachment-add')?.enabled,'true');await pause(700);
+ }
+ const cards=controls();assert.equal(cards.length,2);await tap(cards[0]);await wait('attachment-preview-image');assert.ok(find('发送前预览'));await tap(await reveal('attachment-next'));await wait('attachment-pdf-preview');
+ await tap(await reveal('attachment-preview-remove'));await wait('attachment-preview-image');await back();assert.equal(find('chat-input').text,draftText);assert.equal(controls().length,1);await tap(controls()[0]);await tap(await reveal('attachment-preview-remove'));await wait('chat-input');assert.equal(controls().length,0);assert.equal(find('chat-input').text,draftText);await input('chat-input','');await pause(1500);assert.equal((await state()).receipts.length,0);console.log('PASS native system picker: image/PDF draft preview, next attachment, removal of only selected attachment, unchanged text and no send');
+}else if(mode==='composer-fork'){
+ await root();await tap(await reveal('edit-fork-preview_user'));await wait('fork-text');await input('fork-text','NATIVE_PREVIEW_KEEP_DRAFT');await tap(await reveal('fork-create'));await wait('chat-input');await pause(900);
+ const controls=()=>layout().filter(n=>n.visible!=='false'&&n.id?.startsWith('attachment-open-'));
+ const draftText=find('chat-input').text;assert.ok(draftText.includes('NATIVE_PREVIEW_KEEP_DRAFT'));assert.equal(controls().length,3,'Only the new empty fixture fork contains draft files');
+ await tap(controls()[0]);await wait('attachment-preview-image');await tap(await reveal('attachment-next'));await wait('attachment-pdf-preview');await tap(await reveal('attachment-preview-remove'));await wait('attachment-preview-text');await tap(await reveal('attachment-preview-remove'));await wait('attachment-preview-image');await back();assert.equal(find('chat-input').text,draftText);assert.equal(controls().length,1);
+ await tap(controls()[0]);await tap(await reveal('attachment-preview-remove'));await wait('chat-input');assert.equal(controls().length,0);assert.equal(find('chat-input').text,draftText);await input('chat-input','');assert.equal(find('chat-input').text,'');
+ const receipts=(await state()).receipts;assert.ok(receipts.length>0&&receipts.every(r=>r.method==='POST'&&/^\/api\/session\/ses_fixture\/fork$/.test(r.path)),'Only the synthetic fork is allowed, never a model send');console.log('PASS native existing edit/fork path: image/PDF/text draft preview, next attachment, scoped removal, scroll gesture, text preservation and no model submission');
+}else if(mode==='restart'||mode==='offline'){
+ cmd('shell','aa force-stop com.example.opencode_harmony');await pause(1500);cmd('shell','aa start -b com.example.opencode_harmony -m entry -a EntryAbility');await wait('chat-input',45000);await menu('消息收藏');await input('bookmark-search','NATIVE_BOOKMARK_BODY');await tap('bookmark-item-0');await wait('bookmark-detail');assert.ok(find('NATIVE_BOOKMARK_BODY'));await shot('message-bookmark-final-native');if(mode==='restart'){await root();console.log('PASS native bookmark process restart recovery');}else{assert.equal(find('bookmark-context').enabled,'false');await shot('message-bookmark-offline-native');await tap('bookmark-remove');await wait('取消收藏');await tap('保留');assert.ok(find('bookmark-detail'));await tap('bookmark-remove');await tap('取消收藏');await wait('bookmark-empty');await root();console.log('PASS native offline bookmark recovery, disabled online context and cancel/remove workflow');}
+}
