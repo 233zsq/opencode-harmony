@@ -6,7 +6,7 @@
 
 一个使用 ArkTS / ArkUI 构建的原生远程客户端。连接自己的 OpenCode 服务器，在手机或平板上继续对话、查看代码、处理问答和审批。
 
-**[v0.1 Beta 2 · 源码预览版](https://github.com/233zsq/opencode-harmony/releases/tag/v0.1.0-beta.2)** · [更新说明](CHANGELOG.md) · [问题反馈](https://github.com/233zsq/opencode-harmony/issues)
+**[v0.1 Beta 3 · 测试版](https://github.com/233zsq/opencode-harmony/releases/tag/v0.1.0-beta.3)** · [更新说明](CHANGELOG.md) · [问题反馈](https://github.com/233zsq/opencode-harmony/issues)
 
 ## 可以做什么
 
@@ -20,7 +20,7 @@
 
 ## 开始使用
 
-本次提供源码预览，需通过 DevEco Studio 构建并使用自己的调试签名安装。
+本次提供源码和未签名 HAP，需使用自己的 DevEco 签名后安装。未签名包不能直接安装；含设备授权信息的自用调试签名包不公开分发。
 
 1. 从 [Releases](https://github.com/233zsq/opencode-harmony/releases) 下载源码，按[构建说明](docs/BUILDING.md)安装到设备。
 2. 准备兼容 **OpenCode v2.0.29** 的服务器及其 API 账号、密码。
@@ -32,7 +32,7 @@
 ## Beta 说明
 
 - 最低兼容 **API24**，目标 **API26**；沉浸光感按系统能力启用。
-- 最新版本已在 API26 模拟器验证，API24 真机和不同设备布局仍需进一步验收。
+- API26 模拟器已覆盖主要流程；API24 真机、部分附件与搜索流程仍需进一步验收。
 - 当前以 OpenCode v2.0.29 协议为基线，其他服务端版本可能不兼容。
 - 一次最多 4 个附件，合计 1 MiB；任务提醒受系统后台与进程存活状态限制。
 - 连接凭据保存在系统安全资产；本机加密缓存默认上限 200 MiB，可在“更多功能 → 存储与流量”清理。完整历史由服务器保存。

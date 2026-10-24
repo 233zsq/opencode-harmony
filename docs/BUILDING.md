@@ -1,6 +1,6 @@
 # 从源码构建
 
-v0.1 Beta 是源码预览版，适合愿意自行构建和反馈问题的使用者。本仓库不提供开发者个人签名材料；安装到设备时请使用自己的 DevEco 调试签名。
+v0.1 Beta 3 是测试版，公开提供源码与未签名 HAP，适合愿意自行构建或签名并反馈问题的使用者。本仓库不提供开发者个人签名材料；安装到设备时请使用自己的 DevEco 调试签名。
 
 ## 环境
 
@@ -28,7 +28,7 @@ powershell -File scripts/build.ps1 -Install -Launch
 
 使用其他 DevEco 安装位置时，先设置 DEVECO_STUDIO_HOME。指定设备可加 -DeviceTarget；签名安装方式与 IDE 保持一致。脚本不卸载或清空应用数据。
 
-构建产物位于 entry/build/default/outputs/default。当前 Release 只分发源码；生成的调试 HAP 用于自己的设备，不作为通用安装包发布。
+构建产物位于 entry/build/default/outputs/default。Beta 3 Release 分发源码、未签名 HAP 与 SHA256 校验值；未签名 HAP 仍需使用自己的证书和 Profile 签名后安装。生成的自用签名 HAP 仅适用于 Profile 授权的设备，不公开分发。
 
 ## 连接与服务端
 
@@ -61,7 +61,7 @@ GitHub Actions 在所有 PR、main 提交和版本标签上自动运行 Windows/
 
 ## 新功能的模拟器检查
 
-`tests/search-drafts-ui.mjs` 的 search / paging / draft / offline / clear 模式仅用于已连接到 4216 loopback fixture 的 API26 模拟器；先运行 fake-server 并准备 cache-history 种子，paging 模式会切换到 360 条的导出种子会话，使用设备到本机的临时端口映射。offline 模式前停止 fixture，清理模式前恢复服务；结束后移除临时连接和映射。脚本不发送真实模型任务，不用于生产账号。
+`tests/search-drafts-ui.mjs` 的 search / reasoning / paging / draft / offline / clear 模式仅用于已连接到 4216 loopback fixture 的 API26 模拟器；先运行 fake-server 并准备 cache-history 种子，paging 模式会切换到 360 条的导出种子会话，使用设备到本机的临时端口映射。offline 模式前停止 fixture，清理模式前恢复服务；结束后移除临时连接和映射。脚本不发送真实模型任务，不用于生产账号。
 
 会话查找只覆盖当前加载的最多 300 条消息，思考和工具默认不参与；附件仅搜索名称。文本草稿最多 20000 字符、100 份，复用本机加密缓存和 200 MiB 逻辑上限；附件、审批及结果待核对的发送请求不会持久化为草稿。恢复文本后仍需用户检查并手动发送，缓存或存储失败不会阻断在线功能。
 
@@ -86,3 +86,5 @@ GitHub Actions 在所有 PR、main 提交和版本标签上自动运行 Windows/
 当前模拟器的系统文件选择器在进入 Download 时发生系统文件管理器崩溃（`libarkdata_db_core.z.so`）。`composer-fork` 改用已有的“编辑并分叉 → 沿用附件”载入本机 fixture 的三种附件，验收发送前预览；只创建测试分支，不调用模型。系统文件选择器的完整导入流程仍需后续设备复核，不可用本项替代。
 
 向模拟器部署测试文件时，HDC 的本机源路径应使用完整 Windows 绝对路径，目标使用 Download 中的完整文件名；相对源路径可能保留父目录结构。只清理本轮生成的测试文件，保留已有下载文件与服务器配置。
+
+Beta 3 的搜索命中展开修复通过实际 Index 处理函数回归与 ArkTS 构建；本轮模拟器 HDC 文件传输重连后仍超时，新增 reasoning 点击流程尚待重跑。此限制不等同于已完成真机验收。
