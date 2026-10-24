@@ -15,6 +15,7 @@ function wrap(db){return{
  async executeSql(sql,args=[]){if(args.length)db.prepare(sql).run(...args);else db.exec(sql);},
  async querySql(sql,args=[]){const rows=db.prepare(sql).all(...args);let index=-1;return{
   goToFirstRow(){index=0;return rows.length>0;},
+  goToNextRow(){index++;return index<rows.length;},
   getString(column){return String(Object.values(rows[index])[column]);},
   getLong(column){return Number(Object.values(rows[index])[column]);},close(){}
  };}
@@ -32,6 +33,7 @@ const modules={
  '@kit.ArkTS':{util:{TextEncoder:class{encodeInto(text){return new TextEncoder().encode(text);}}}},
  '../domain/Core':{},'../domain/Attachments':{}
 };
+const bookmarkExports={};vm.runInNewContext(ts.transpileModule(readFileSync(join(root,'entry/src/main/ets/domain/MessageBookmarks.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:bookmarkExports,require:()=>({}),Date,JSON,Set,Number,Array,Error});modules['../domain/MessageBookmarks']=bookmarkExports;
 const exports={};vm.runInNewContext(ts.transpileModule(readFileSync(join(root,'entry/src/main/ets/data/TranscriptCache.ets'),'utf8'),{
  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}
 }).outputText,{exports,require:name=>{assert.ok(modules[name],name);return modules[name];},Date:CacheDate,Map,Set,Array,Promise,JSON,Error});
@@ -112,6 +114,27 @@ try{
   for(let i=0;i<101;i++)await cache.saveDraft(config(),'/repo','s'+i,'draft'+i);
   assert.equal(await cache.loadDraft(config(),'/repo','s0'),'');assert.equal(await cache.loadDraft(config(),'/repo','s100'),'draft100');
   databases.get('draft-limit').exec("UPDATE entries SET body='{}'");assert.equal(await cache.loadDraft(config(),'/repo','s100'),'');
+ });
+ await test('bookmarks survive restart with only text and attachment metadata, never reasoning or file bytes',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'bookmarks'});const msg=message('m','正文😀',Buffer.from('PRIVATE_BYTES').toString('base64'));msg.reasoning='PRIVATE_REASONING';msg.tools=[{name:'read',input:'PRIVATE_TOOL',output:'private'}];
+  const item=bookmarkExports.bookmarkMessage(msg,'/repo','s','Title');await cache.saveBookmark(config(),item);msg.text='changed';const reopened=new exports.TranscriptCache();await reopened.init({id:'bookmarks'});const loaded=await reopened.bookmarks(config());assert.equal(loaded[0].text,'正文😀');
+  const json=JSON.stringify(loaded);for(const value of ['PRIVATE_BYTES','PRIVATE_REASONING','PRIVATE_TOOL','data','remoteHash'])assert.equal(json.includes(value),false);assert.equal(loaded[0].files[0].name,'image.png');
+ });
+ await test('bookmarks isolate accounts and endpoints and distinguish equal IDs in separate directories',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'bookmark-scope'});for(const dir of ['/one','/two'])await cache.saveBookmark(config(),bookmarkExports.bookmarkMessage(message('m'),dir,'s','Title'));
+  assert.equal((await cache.bookmarks(config())).length,2);assert.equal((await cache.bookmarks(config('other'))).length,0);assert.equal((await cache.bookmarks(config('owner','https://other.example'))).length,0);
+ });
+ await test('cache clearing and account cache invalidation preserve authored bookmarks until explicit removal',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'bookmark-clear'});const item=bookmarkExports.bookmarkMessage(message('m'),'/repo','s','Title');await cache.saveBookmark(config(),item);await cache.saveBookmark(config('other'),item);await cache.clear();assert.equal((await cache.bookmarks(config())).length,1);
+  const queued=cache.saveBookmark(config(),item);const removal=cache.removeServer(config());await Promise.all([queued,removal]);assert.equal((await cache.bookmarks(config())).length,1);assert.equal((await cache.bookmarks(config('other'))).length,1);
+  await cache.removeBookmark(config('other'),item.id);assert.equal((await cache.bookmarks(config('other'))).length,0);assert.equal((await cache.bookmarks(config())).length,1);
+ });
+ await test('bookmark quota rejects new records without evicting existing favorites and allows replacement',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'bookmark-quota'});for(let i=0;i<100;i++)await cache.saveBookmark(config(),bookmarkExports.bookmarkMessage(message('m'+i),'/repo','s','Title'));
+  await assert.rejects(cache.saveBookmark(config(),bookmarkExports.bookmarkMessage(message('extra'),'/repo','s','Title')),/100/);await cache.saveBookmark(config(),bookmarkExports.bookmarkMessage(message('m0','edited'),'/repo','s','Title'));assert.equal((await cache.bookmarks(config())).length,100);
+ });
+ await test('corrupt bookmark records fail visibly and are not silently deleted',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'bookmark-bad'});await cache.saveBookmark(config(),bookmarkExports.bookmarkMessage(message('m'),'/repo','s','Title'));databases.get('bookmark-bad').exec("UPDATE bookmarks SET body='{}'");await assert.rejects(cache.bookmarks(config()));assert.equal(databases.get('bookmark-bad').prepare('SELECT count(*) n FROM bookmarks').get().n,1);
  });
  assert.ok(encryptedOpens>=8);console.log(count+' encrypted-cache configuration and real SQLite behavior tests passed; native encryption itself requires device verification.');
 }finally{

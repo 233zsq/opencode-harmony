@@ -7,6 +7,9 @@ import { MarkdownText } from './MarkdownText';
 @Component
 export struct ConversationMessage {
   @Prop message: ChatMessage = { id: '', role: '', text: '', reasoning: '', tools: [], parts: [], state: 'completed' };
+  @Prop bookmarked: boolean = false;
+  @Prop bookmarkEnabled: boolean = false;
+  onBookmark: () => void = (): void => {};
   @Prop thinking: boolean = false;
   @Prop reasoningExpanded: boolean = false;
   onFork: (edit: boolean) => void = (): void => {};
@@ -17,7 +20,7 @@ export struct ConversationMessage {
   onAttachment: (item: Attachment) => void = (): void => {};
   private reasoningScroller: Scroller = new Scroller();
   @Builder
-  copyMenu() { Menu() { MenuItem({ content: '复制消息' }).onClick(() => { this.onCopy(this.message.text); }) } }
+  copyMenu() { Menu() { MenuItem({ content: '复制消息' }).onClick(() => { this.onCopy(this.message.text); }); MenuItem({ content: this.bookmarked ? '取消收藏' : '收藏消息' }).enabled(this.bookmarkEnabled).onClick(() => { this.onBookmark(); }) } }
   private label(tool: ToolItem): string {
     switch (tool.name) {
       case 'read': case 'read_file': return '读取文件';
@@ -45,14 +48,18 @@ export struct ConversationMessage {
       Column({ space: 8 }) {
         if (this.message.text) { Row() {
         Blank().layoutWeight(1)
+        Button({ type: ButtonType.Circle }) { SymbolGlyph(this.bookmarked ? $r('sys.symbol.star_fill') : $r('sys.symbol.star')).fontSize(16).fontColor([C.secondary]) }
+          .id('bookmark-message-' + this.message.id).accessibilityText(this.bookmarked ? '取消收藏消息' : '收藏消息').width(28).height(28).padding(0).backgroundColor(Color.Transparent)
+          .responseRegion({ x: -6, y: -6, width: 40, height: 40 }).enabled(this.bookmarkEnabled).onClick(() => { this.onBookmark(); })
         Button('编辑').id('edit-fork-' + this.message.id).accessibilityText('编辑这条消息并分叉').buttonStyle(ButtonStyleMode.TEXTUAL).height(28).constraintSize({ minWidth: 28 }).padding(0).fontSize(13).fontColor(C.muted).margin({ right: 6, top: 5 })
           .responseRegion({ x: -6, y: -6, width: 40, height: 40 }).onClick(() => { this.onFork(true); })
         Text(this.message.text).id('message-user-' + this.message.id).fontSize(15).lineHeight(25).fontColor(C.text)
           .padding({ left: 15, right: 15, top: 12, bottom: 12 }).backgroundColor(C.bubble)
           .borderRadius({ topLeft: 14, topRight: 14, bottomRight: 4, bottomLeft: 14 })
-          .constraintSize({ maxWidth: '88%' }).wordBreak(WordBreak.BREAK_WORD).copyOption(CopyOptions.InApp)
+          .constraintSize({ maxWidth: '80%' }).wordBreak(WordBreak.BREAK_WORD).copyOption(CopyOptions.InApp)
         }.width('100%').alignItems(VerticalAlign.Top) }
         if (this.message.files?.length) { AttachmentStrip({ items: this.message.files || [], onOpen: this.onAttachment }) }
+        if (!this.message.text && this.message.files?.length) { Button(this.bookmarked ? '已收藏附件名称' : '收藏附件名称').id('bookmark-files-' + this.message.id).height(40).fontSize(13).fontColor(C.secondary).backgroundColor(Color.Transparent).enabled(this.bookmarkEnabled).onClick(() => { this.onBookmark(); }) }
       }.width('100%').alignItems(HorizontalAlign.End).margin({ top: 12, bottom: 12 }).bindContextMenu(this.copyMenu(), ResponseType.LongPress)
     } else if (this.message.role !== 'assistant') {
       Text(this.message.text).fontSize(13).fontColor(C.muted).width('100%').textAlign(TextAlign.Center).wordBreak(WordBreak.BREAK_WORD).padding(8)
@@ -83,13 +90,16 @@ export struct ConversationMessage {
           }.width('100%').border({ width: 1, color: C.separator }).borderRadius(8)
         }
         if (this.message.text) { MarkdownText({ content: this.message.text, onOpenLink: this.onOpenLink, onCopy: this.onCopy }) }
-        if (this.message.text || this.message.tools.length) {
+        if (this.message.files?.length) { AttachmentStrip({ items: this.message.files || [], onOpen: this.onAttachment }) }
+        if (this.message.text || this.message.tools.length || this.message.files?.length) {
           Row({ space: 10 }) {
             if (this.message.text) {
               Button('复制回复').id('copy-message-' + this.message.id).accessibilityText('复制回复内容').buttonStyle(ButtonStyleMode.TEXTUAL).height(28).constraintSize({ minWidth: 44 }).padding({ left: 0, right: 8 }).fontSize(13).fontColor(C.muted)
                 .responseRegion({ x: 0, y: -6, width: '100%', height: 40 }).onClick(() => { this.onCopy(this.message.text); })
               Divider().vertical(true).height(10).color(C.separator)
             }
+            Button(this.bookmarked ? '已收藏' : '收藏').id('bookmark-message-' + this.message.id).buttonStyle(ButtonStyleMode.TEXTUAL).height(28).fontSize(13).fontColor(C.muted).constraintSize({ minWidth: 40 })
+              .responseRegion({ x: -4, y: -6, width: 48, height: 40 }).enabled(this.bookmarkEnabled).onClick(() => { this.onBookmark(); })
             Button('分叉').id('fork-message-' + this.message.id).accessibilityText('从这条回复分叉').buttonStyle(ButtonStyleMode.TEXTUAL).height(28).constraintSize({ minWidth: 44 }).fontSize(13).fontColor(C.muted)
               .responseRegion({ x: 0, y: -6, width: '100%', height: 40 }).onClick(() => { this.onFork(false); })
           }.width('100%')
@@ -112,7 +122,7 @@ export struct ConversationMessage {
             }, (tool: ToolItem) => tool.id + tool.status + tool.input)
           }.width('100%')
         }
-        if (!this.message.text && !this.message.reasoning && !this.message.tools.length) {
+        if (!this.message.text && !this.message.reasoning && !this.message.tools.length && !this.message.files?.length) {
           Text('正在等待回复…').fontSize(15).fontColor(C.muted).wordBreak(WordBreak.BREAK_WORD)
         }
       }.alignItems(HorizontalAlign.Start).width('100%').padding({ top: 4, bottom: 6 }).justifyContent(FlexAlign.Start)
