@@ -35,6 +35,7 @@ function load(file, key) {
   modules.set(key, exports);
   return exports;
 }
+load('entry/src/main/ets/domain/MessageBookmarks.ts', '../domain/MessageBookmarks');
 load('entry/src/main/ets/domain/PromptTemplates.ts', '../domain/PromptTemplates');
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
@@ -844,6 +845,63 @@ await test('template insertion cannot overwrite a pending request or a busy or a
 await test('offline template insertion remains a local editable draft and cannot send',async()=>{
  const t=trafficStore();t.store.status='离线缓存';t.store.api=undefined;
  assert.equal(t.store.insertPromptTemplate('offline text'),true);assert.equal(t.store.draft,'offline text');assert.equal(t.store.canSendMessages(),false);
+});
+
+function bookmarkStoreFixture(t=trafficStore()){const items=[];t.store.attachBookmarkStore({bookmarks:async()=>items.slice(),saveBookmark:async(_config,item)=>{items.push(item);},removeBookmark:async(_config,id)=>{const index=items.findIndex(x=>x.id===id);if(index>=0)items.splice(index,1);}});return{...t,items};}
+await test('bookmark toggle stores a snapshot, keeps the composer and makes no network request',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();t.store.draft='keep';const msg={...message('m','bookmark body'),files:[],role:'assistant'};let calls=0;t.store.api.request=async()=>{calls++;return{};};
+ assert.equal(await t.store.toggleBookmark(msg),true);msg.text='later';assert.equal(t.items[0].text,'bookmark body');assert.equal(t.store.isBookmarked('m'),true);assert.equal(t.store.draft,'keep');assert.equal(calls,0);assert.equal(await t.store.toggleBookmark(msg),true);assert.equal(t.items.length,0);
+});
+await test('failed bookmark writes retain the visible collection and allow explicit retry',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();t.store.bookmarkStore.saveBookmark=async()=>{throw Error('full');};assert.equal(await t.store.toggleBookmark(message('m','body')),false);assert.equal(t.store.bookmarks.length,0);assert.equal(t.store.bookmarkSaving,false);assert.match(t.store.bookmarkError,/full/);
+});
+await test('late bookmark reads cannot cross account changes or authentication rejection',async()=>{
+ for(const change of [store=>store.disconnect(),store=>store.fail(new protocol.ApiError(401,'rejected'))]){const t=bookmarkStoreFixture();let release;t.store.bookmarkStore.bookmarks=()=>new Promise(r=>release=r);const loading=t.store.refreshBookmarks();change(t.store);release([{id:'private'}]);await loading;assert.equal(t.store.bookmarks.length,0);assert.equal(t.store.bookmarksReady,false);}
+});
+await test('late saved bookmark cannot repopulate a disconnected account',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();let release;t.store.bookmarkStore.saveBookmark=()=>new Promise(r=>release=r);const saving=t.store.toggleBookmark(message('m','private'));assert.equal(t.store.bookmarkSaving,true);t.store.disconnect();release();assert.equal(await saving,false);assert.equal(t.store.bookmarks.length,0);
+});
+await test('bookmark reads from a changed URL or username never retain the old account list',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();await t.store.toggleBookmark(message('m','body'));const old=t.store.bookmarkConfig();const changed={...old,username:'another'};t.store.servers=[changed];t.store.connected=changed.id;let release;t.store.bookmarkStore.bookmarks=()=>new Promise(r=>release=r);const loading=t.store.refreshBookmarks();assert.equal(t.store.bookmarks.length,0);release([]);await loading;assert.equal(t.store.isBookmarked('m'),false);
+});
+await test('missing encrypted bookmark storage never reports a successful collection',async()=>{const t=trafficStore();await t.store.refreshBookmarks();assert.equal(t.store.bookmarksReady,false);assert.ok(t.store.bookmarkError);assert.equal(await t.store.toggleBookmark(message('m','text')),false);});
+await test('confirmed V2 user messages without a completed timestamp can be bookmarked',async()=>{const t=bookmarkStoreFixture();await t.store.refreshBookmarks();const api=new protocol.Protocol({url:'https://fixture.example',username:'owner'},'');const item=api.parseMessages({data:[{id:'user-saved',type:'user',text:'Saved user request',time:{created:1}}]})[0];assert.equal(item.role,'user');assert.equal(await t.store.toggleBookmark(item),true);assert.equal(t.store.bookmarks[0].text,'Saved user request');});
+
+function bookmarkModelFixture(){
+ const t=modelControlStore(),config={id:'model-server',name:'Fixture',url:'https://bookmarks.example',username:'owner',allowHttp:false};
+ t.store.servers=[config];t.store.api.config=config;return bookmarkStoreFixture(t);
+}
+async function pendingBookmark(t,operation){
+ await t.store.refreshBookmarks();const msg=message('concurrent-bookmark','Saved during model selection');
+ if(operation!=='save')await t.store.toggleBookmark(msg);
+ if(operation==='read'){t.store.bookmarks=[];t.store.bookmarksReady=false;}
+ const method={read:'bookmarks',save:'saveBookmark',remove:'removeBookmark'}[operation];
+ const original=t.store.bookmarkStore[method];let release;const gate=new Promise(resolve=>release=resolve);
+ t.store.bookmarkStore[method]=async(...args)=>{await gate;return original(...args);};
+ const pending=operation==='read'?t.store.refreshBookmarks():operation==='save'?t.store.toggleBookmark(msg):t.store.removeMessageBookmark(t.items[0].id);
+ return{pending,release};
+}
+for(const operation of ['save','read','remove'])await test('bookmark '+operation+' accepts a same-account config replacement from a real model change',async()=>{
+ const t=bookmarkModelFixture(),before=t.store.bookmarkConfig(),{pending,release}=await pendingBookmark(t,operation);
+ assert.equal(await t.store.chooseModel('p/other'),true);assert.notEqual(t.store.bookmarkConfig(),before);
+ assert.equal(t.store.bookmarkAccount(t.store.bookmarkConfig()),t.store.bookmarkAccount(before));
+ release();const result=await pending;
+ assert.equal(t.items.length,operation==='remove'?0:1,'The underlying bookmark operation completed');
+ if(operation!=='read')assert.equal(result,true,'Persisted bookmark results must be acknowledged by the UI');
+ assert.equal(t.store.bookmarks.length,operation==='remove'?0:1);assert.equal(t.store.isBookmarked('concurrent-bookmark'),operation!=='remove');
+ assert.equal(t.store.bookmarksReady,true);assert.equal(t.store.bookmarksBusy,false);assert.equal(t.store.bookmarkSaving,false);assert.equal(t.store.bookmarkError,'');
+});
+await test('pending bookmark results still reject changed URL, username, authentication and connection lifecycle',async()=>{
+ const changes=[
+  store=>{store.servers=store.servers.map(c=>({...c,url:'https://another.example'}));},
+  store=>{store.servers=store.servers.map(c=>({...c,username:'another'}));},
+  store=>store.fail(new protocol.ApiError(401,'rejected')),
+  store=>{const config=store.bookmarkConfig();store.disconnect();store.servers=[{...config}];store.connected=config.id;}
+ ];
+ for(const operation of ['save','read','remove'])for(const change of changes){
+  const t=bookmarkModelFixture(),{pending,release}=await pendingBookmark(t,operation);change(t.store);const visible=JSON.stringify(t.store.bookmarks);
+  release();const result=await pending;if(operation!=='read')assert.equal(result,false);assert.equal(JSON.stringify(t.store.bookmarks),visible,'Stale work cannot publish into another account or lifecycle');
+ }
 });
 
 console.log(count + ' adapter/state tests passed.');

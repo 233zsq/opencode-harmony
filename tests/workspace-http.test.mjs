@@ -57,6 +57,7 @@ const modules=new Map([
 ]);
 function load(path,key){const exports={};const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true}}).outputText;
  vm.runInNewContext(code,{exports,require:name=>{assert.ok(modules.has(name),name);return modules.get(name);},Observed:value=>value,Error,Map,Set,Date,Math,JSON,setTimeout,clearTimeout,setInterval,clearInterval});modules.set(key,exports);return exports;}
+load('entry/src/main/ets/domain/MessageBookmarks.ts', '../domain/MessageBookmarks');
 load('entry/src/main/ets/domain/PromptTemplates.ts', '../domain/PromptTemplates');
 load('entry/src/main/ets/domain/Attachments.ts','../domain/Attachments');load('entry/src/main/ets/domain/Core.ts','../domain/Core');
 modules.set('./Core', modules.get('../domain/Core'));
