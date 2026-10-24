@@ -1,3 +1,4 @@
+import { appendPromptTemplate } from '../domain/PromptTemplates';
 import { ModelPreferences, emptyModelPreferences, enabledModels, setModelEnabled, setModelFavorite, rememberModel } from '../domain/ModelSelection';
 import { prepareConnection, sameConnectionIdentity, ConnectionInput } from '../domain/Connections';
 import { SessionUsage, emptyUsage, CompactRecord } from '../domain/SessionUsage';
@@ -173,6 +174,11 @@ export class AppStore {
   private draftRestored: boolean = false;
   draftNotice: string = '';
   attachDraftStore(store: TextDraftPort): void { this.textDraftStore = store; }
+  insertPromptTemplate(text: string): boolean {
+    if (!this.sessionID || this.pendingSend || this.busy) { this.error = '请先打开会话，并完成当前发送确认'; return false; }
+    try { const next = appendPromptTemplate(this.draft, text); this.updateDraft(next); this.error = ''; return true; }
+    catch (error) { this.error = (error as Error).message; return false; }
+  }
   updateDraft(text: string): void {
     this.draft = text.slice(0, 20000); this.draftRevision++; this.draftRestored = false; this.draftDirty = true; this.draftNotice = '';
     if (this.draftTimer >= 0) { clearTimeout(this.draftTimer); }

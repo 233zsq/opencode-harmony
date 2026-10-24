@@ -35,6 +35,7 @@ function load(file, key) {
   modules.set(key, exports);
   return exports;
 }
+load('entry/src/main/ets/domain/PromptTemplates.ts', '../domain/PromptTemplates');
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
 modules.set('./Core', modules.get('../domain/Core'));
@@ -827,4 +828,22 @@ await test('known authentication failure disables sending without creating an un
  const t=trafficStore();t.store.networkBlocked=true;t.store.updateDraft('keep text');t.store.api.request=async()=>{throw Error('must not send');};
  assert.equal(t.store.canSendMessages(),false);await t.store.send();assert.equal(t.store.pendingSend,undefined);assert.equal(t.store.draft,'keep text');
 });
+await test('inserting a template preserves existing text and attachments without a server request',async()=>{
+ const t=trafficStore();t.store.draft='Existing instruction';const file={id:'file',name:'a.txt',data:'YWJj',mime:'text/plain',size:3};t.store.attachments=[file];
+ let requests=0;t.store.api.request=async()=>{requests++;return{};};
+ assert.equal(t.store.insertPromptTemplate('Review this code'),true);
+ assert.equal(t.store.draft,'Existing instruction\n\nReview this code');assert.equal(t.store.attachments[0],file);assert.equal(requests,0);assert.equal(t.store.pendingSend,undefined);
+ let saved='';t.store.attachDraftStore({loadDraft:async()=>'',saveDraft:async(_c,_d,_s,text)=>{saved=text;}});await t.store.flushTextDraft();assert.equal(saved,t.store.draft);
+});
+await test('template insertion never truncates an oversized combined draft',async()=>{
+ const t=trafficStore();t.store.draft='x'.repeat(19999);assert.equal(t.store.insertPromptTemplate('extra'),false);assert.equal(t.store.draft.length,19999);assert.match(t.store.error,/20000/);
+});
+await test('template insertion cannot overwrite a pending request or a busy or absent conversation',async()=>{
+ for(const kind of ['pending','busy','absent']){const t=trafficStore();t.store.draft='keep';if(kind==='pending')t.store.pendingSend={id:'p',sessionID:'s',text:'pending'};if(kind==='busy')t.store.busy=true;if(kind==='absent')t.store.sessionID='';assert.equal(t.store.insertPromptTemplate('template'),false);assert.equal(t.store.draft,'keep');}
+});
+await test('offline template insertion remains a local editable draft and cannot send',async()=>{
+ const t=trafficStore();t.store.status='离线缓存';t.store.api=undefined;
+ assert.equal(t.store.insertPromptTemplate('offline text'),true);assert.equal(t.store.draft,'offline text');assert.equal(t.store.canSendMessages(),false);
+});
+
 console.log(count + ' adapter/state tests passed.');
