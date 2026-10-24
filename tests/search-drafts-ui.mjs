@@ -1,6 +1,6 @@
 // API26 native acceptance against the named loopback fixture only; no real Agent prompts.
 import assert from 'node:assert/strict';
-import {find,wait,tap,input,menu,back,pause,shot,cmd} from './native-driver.mjs';
+import {find,wait,tap,input,menu,back,pause,shot,cmd,reveal} from './native-driver.mjs';
 const mode=process.argv[2]||'search';
 const draft='NATIVE_ENCRYPTED_TEXT_DRAFT_20261023';
 async function restart(){cmd('shell','aa force-stop com.example.opencode_harmony');await pause(600);cmd('shell','aa start -b com.example.opencode_harmony -m entry -a EntryAbility');await wait('chat-input',45000);}
@@ -11,6 +11,15 @@ if(mode==='search'){
  await tap('全部');await wait('search-hit-cache_native_user');await shot('conversation-search-native');
  await tap('search-hit-cache_native_user');await wait('conversation-list');assert.ok(find('NATIVE_CACHE_PERSISTENCE_FIXTURE'));await shot('conversation-search-location');
  console.log('PASS native search, author filter, result count and message-context navigation');
+}else if(mode==='reasoning'){
+ const endpoint='http://127.0.0.1:4216',needle='示例文件与实现步骤';
+ const response=await fetch(endpoint+'/__test/ui-phase?phase=thinking',{method:'POST'});assert.equal(response.ok,true);const {id}=await response.json();
+ await tap(await reveal('reasoning-toggle-'+id));assert.ok(!find('reasoning-content-'+id),'Manually collapse the ongoing reasoning first');
+ await menu('查找对话');await input('conversation-search-input',needle);await tap('search-details');await tap(await reveal('search-hit-'+id));
+ await wait('reasoning-content-'+id);assert.ok(find('reasoning-content-'+id).text.includes(needle));await shot('pr4-search-streaming-reasoning-native');
+ const state=await(await fetch(endpoint+'/__test/state')).json();assert.equal(state.receipts.length,0,'Search must not submit a model prompt');
+ await fetch(endpoint+'/__test/ui-phase?phase=answer',{method:'POST'});await fetch(endpoint+'/__test/ui-phase?phase=tool-done',{method:'POST'});
+ console.log('PASS native ongoing reasoning: manual collapse, detail search, selected hit reveals matching content with no model call');
 }else if(mode==='paging'){
  await fetch('http://127.0.0.1:4216/__test/export-history',{method:'POST'});if(find('native-back'))await back();await menu('项目与会话');await tap('session-ses_fixture');await wait('chat-input');await pause(1000);
  await menu('查找对话');await wait('search-earlier');await wait('已加载 30 条 · 0 条匹配');
