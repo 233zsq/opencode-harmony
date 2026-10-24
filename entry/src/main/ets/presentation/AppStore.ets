@@ -193,7 +193,7 @@ export class AppStore {
     const scope = this.bookmarkAccount(config); if (scope !== this.bookmarkScope) { this.resetBookmarks(); this.bookmarkScope = scope; }
     if (this.bookmarkSaving) { return; } const epoch = ++this.bookmarkEpoch; this.bookmarksBusy = true; this.bookmarkError = '';
     try { const items = await this.bookmarkStore.bookmarks(config);
-      if (epoch === this.bookmarkEpoch && !this.networkBlocked && config === this.bookmarkConfig()) { this.bookmarks = items; this.bookmarksReady = true; }
+      if (epoch === this.bookmarkEpoch && !this.networkBlocked && scope === this.bookmarkAccount(this.bookmarkConfig())) { this.bookmarks = items; this.bookmarksReady = true; }
     } catch (_) { if (epoch === this.bookmarkEpoch) { this.bookmarksReady = false; this.bookmarkError = '收藏未能读取，请重试；原有内容仍保留'; } }
     finally { if (epoch === this.bookmarkEpoch) { this.bookmarksBusy = false; } }
   }
@@ -204,17 +204,17 @@ export class AppStore {
     if (existing) { return this.removeMessageBookmark(id); }
     let item: MessageBookmark;
     try { item = bookmarkMessage(message, this.directory, this.sessionID, this.sessionTitle); } catch (e) { this.bookmarkError = (e as Error).message; return false; }
-    const epoch = this.bookmarkEpoch; this.bookmarkSaving = true; this.bookmarkError = '';
+    const epoch = this.bookmarkEpoch; const scope = this.bookmarkAccount(config); this.bookmarkSaving = true; this.bookmarkError = '';
     try { await this.bookmarkStore.saveBookmark(config, item);
-      if (epoch !== this.bookmarkEpoch || this.networkBlocked || config !== this.bookmarkConfig()) { return false; }
+      if (epoch !== this.bookmarkEpoch || this.networkBlocked || scope !== this.bookmarkAccount(this.bookmarkConfig())) { return false; }
       this.bookmarks = [item].concat(this.bookmarks); return true;
     } catch (e) { if (epoch === this.bookmarkEpoch) { this.bookmarkError = (e as Error).message || '收藏未保存，请重试'; } return false; }
     finally { if (epoch === this.bookmarkEpoch) { this.bookmarkSaving = false; } }
   }
   async removeMessageBookmark(id: string): Promise<boolean> {
     const config = this.bookmarkConfig(); if (!config || this.bookmarkSaving || !this.bookmarksReady || this.networkBlocked || !this.bookmarks.some((item: MessageBookmark): boolean => item.id === id)) { return false; }
-    const epoch = this.bookmarkEpoch; this.bookmarkSaving = true; this.bookmarkError = '';
-    try { await this.bookmarkStore.removeBookmark(config, id); if (epoch !== this.bookmarkEpoch || config !== this.bookmarkConfig() || this.networkBlocked) { return false; }
+    const epoch = this.bookmarkEpoch; const scope = this.bookmarkAccount(config); this.bookmarkSaving = true; this.bookmarkError = '';
+    try { await this.bookmarkStore.removeBookmark(config, id); if (epoch !== this.bookmarkEpoch || scope !== this.bookmarkAccount(this.bookmarkConfig()) || this.networkBlocked) { return false; }
       this.bookmarks = this.bookmarks.filter((item: MessageBookmark): boolean => item.id !== id); return true;
     } catch (_) { if (epoch === this.bookmarkEpoch) { this.bookmarkError = '未能取消收藏，请重试'; } return false; }
     finally { if (epoch === this.bookmarkEpoch) { this.bookmarkSaving = false; } }
