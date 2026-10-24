@@ -49,6 +49,14 @@ export interface TextPart { ordinal: number; type: string; text: string; ended?:
 export interface ChatMessage {
   id: string; role: string; text: string; reasoning: string; parts: TextPart[]; tools: ToolItem[]; state: string; files?: Attachment[];
 }
+export interface TextDraftPort {
+  loadDraft(config: ServerConfig, directory: string, id: string): Promise<string>;
+  saveDraft(config: ServerConfig, directory: string, id: string, text: string): Promise<void>;
+}
+export class EmptyTextDraftStore implements TextDraftPort {
+  async loadDraft(config: ServerConfig, directory: string, id: string): Promise<string> { return ''; }
+  async saveDraft(config: ServerConfig, directory: string, id: string, text: string): Promise<void> { throw new Error('加密草稿存储暂不可用'); }
+}
 export interface TranscriptSnapshot { messages: ChatMessage[]; cursor: string; savedAt: number; }
 export interface TranscriptCachePort {
   load(config: ServerConfig, directory: string, id: string): Promise<TranscriptSnapshot | undefined>;
@@ -411,7 +419,7 @@ export interface PendingPrompt { id: string; sessionID: string; text: string; fi
 export interface QuestionDraft { id: string; fields: FormField[]; }
 export interface ConversationDraft { text: string; pending?: PendingPrompt; forms?: QuestionDraft[]; files?: Attachment[]; }
 
-// Unsent text stays in memory, isolated by server, location and session. No chat history is persisted.
+// Live drafts keep attachments and uncertain request IDs in RAM. Optional encrypted text recovery is separate.
 export class ConversationMemory {
   private drafts: Map<string, ConversationDraft> = new Map<string, ConversationDraft>();
   private key(server: string, directory: string, session: string): string { return JSON.stringify([server, directory, session]); }

@@ -94,6 +94,25 @@ try{
   const reopened=new exports.TranscriptCache();await reopened.init({id:'thin-restart'});
   assert.equal((await reopened.load(config(),'/repo','thin')).messages[0].files[0].data,data);
  });
+ await test('encrypted text drafts survive restart and remain isolated by account, endpoint and session',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'drafts'});const text='  中文草稿\n😀  ';
+  await cache.saveDraft(config(),'/repo','s',text);const reopened=new exports.TranscriptCache();await reopened.init({id:'drafts'});
+  assert.equal(await reopened.loadDraft(config(),'/repo','s'),text);
+  for(const [c,d,id] of [[config('other'),'/repo','s'],[config('owner','https://other.example'),'/repo','s'],[config(),'/other','s'],[config(),'/repo','other']])assert.equal(await reopened.loadDraft(c,d,id),'');
+ });
+ await test('draft deletion, account removal and cache clearing include saved text without reviving queued writes',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'draft-clear'});
+  await cache.saveDraft(config(),'/repo','s','text');await cache.saveDraft(config(),'/repo','s','');assert.equal(await cache.loadDraft(config(),'/repo','s'),'');
+  await cache.saveDraft(config(),'/repo','s','text');await cache.saveDraft(config('other'),'/repo','s','other');await cache.removeServer(config());assert.equal(await cache.loadDraft(config(),'/repo','s'),'');assert.equal(await cache.loadDraft(config('other'),'/repo','s'),'other');
+  const pending=cache.saveDraft(config(),'/repo','s','late');await cache.clear();await pending;assert.equal(await cache.size(),0);
+ });
+ await test('draft quota and malformed records remain bounded',async()=>{
+  const cache=new exports.TranscriptCache();await cache.init({id:'draft-limit'});
+  await assert.rejects(cache.saveDraft(config(),'/repo','too-long','x'.repeat(20001)),/20000/);
+  for(let i=0;i<101;i++)await cache.saveDraft(config(),'/repo','s'+i,'draft'+i);
+  assert.equal(await cache.loadDraft(config(),'/repo','s0'),'');assert.equal(await cache.loadDraft(config(),'/repo','s100'),'draft100');
+  databases.get('draft-limit').exec("UPDATE entries SET body='{}'");assert.equal(await cache.loadDraft(config(),'/repo','s100'),'');
+ });
  assert.ok(encryptedOpens>=8);console.log(count+' encrypted-cache configuration and real SQLite behavior tests passed; native encryption itself requires device verification.');
 }finally{
  for(const db of databases.values())db.close();
