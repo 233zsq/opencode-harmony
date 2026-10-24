@@ -35,6 +35,7 @@ function load(file, key) {
   modules.set(key, exports);
   return exports;
 }
+load('entry/src/main/ets/domain/MessageBookmarks.ts', '../domain/MessageBookmarks');
 load('entry/src/main/ets/domain/PromptTemplates.ts', '../domain/PromptTemplates');
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');
@@ -846,4 +847,23 @@ await test('offline template insertion remains a local editable draft and cannot
  assert.equal(t.store.insertPromptTemplate('offline text'),true);assert.equal(t.store.draft,'offline text');assert.equal(t.store.canSendMessages(),false);
 });
 
+function bookmarkStoreFixture(){const t=trafficStore();const items=[];t.store.attachBookmarkStore({bookmarks:async()=>items.slice(),saveBookmark:async(_config,item)=>{items.push(item);},removeBookmark:async(_config,id)=>{const index=items.findIndex(x=>x.id===id);if(index>=0)items.splice(index,1);}});return{...t,items};}
+await test('bookmark toggle stores a snapshot, keeps the composer and makes no network request',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();t.store.draft='keep';const msg={...message('m','bookmark body'),files:[],role:'assistant'};let calls=0;t.store.api.request=async()=>{calls++;return{};};
+ assert.equal(await t.store.toggleBookmark(msg),true);msg.text='later';assert.equal(t.items[0].text,'bookmark body');assert.equal(t.store.isBookmarked('m'),true);assert.equal(t.store.draft,'keep');assert.equal(calls,0);assert.equal(await t.store.toggleBookmark(msg),true);assert.equal(t.items.length,0);
+});
+await test('failed bookmark writes retain the visible collection and allow explicit retry',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();t.store.bookmarkStore.saveBookmark=async()=>{throw Error('full');};assert.equal(await t.store.toggleBookmark(message('m','body')),false);assert.equal(t.store.bookmarks.length,0);assert.equal(t.store.bookmarkSaving,false);assert.match(t.store.bookmarkError,/full/);
+});
+await test('late bookmark reads cannot cross account changes or authentication rejection',async()=>{
+ for(const change of [store=>store.disconnect(),store=>store.fail(new protocol.ApiError(401,'rejected'))]){const t=bookmarkStoreFixture();let release;t.store.bookmarkStore.bookmarks=()=>new Promise(r=>release=r);const loading=t.store.refreshBookmarks();change(t.store);release([{id:'private'}]);await loading;assert.equal(t.store.bookmarks.length,0);assert.equal(t.store.bookmarksReady,false);}
+});
+await test('late saved bookmark cannot repopulate a disconnected account',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();let release;t.store.bookmarkStore.saveBookmark=()=>new Promise(r=>release=r);const saving=t.store.toggleBookmark(message('m','private'));assert.equal(t.store.bookmarkSaving,true);t.store.disconnect();release();assert.equal(await saving,false);assert.equal(t.store.bookmarks.length,0);
+});
+await test('bookmark reads from a changed URL or username never retain the old account list',async()=>{
+ const t=bookmarkStoreFixture();await t.store.refreshBookmarks();await t.store.toggleBookmark(message('m','body'));const old=t.store.bookmarkConfig();const changed={...old,username:'another'};t.store.servers=[changed];t.store.connected=changed.id;let release;t.store.bookmarkStore.bookmarks=()=>new Promise(r=>release=r);const loading=t.store.refreshBookmarks();assert.equal(t.store.bookmarks.length,0);release([]);await loading;assert.equal(t.store.isBookmarked('m'),false);
+});
+await test('missing encrypted bookmark storage never reports a successful collection',async()=>{const t=trafficStore();await t.store.refreshBookmarks();assert.equal(t.store.bookmarksReady,false);assert.ok(t.store.bookmarkError);assert.equal(await t.store.toggleBookmark(message('m','text')),false);});
+await test('confirmed V2 user messages without a completed timestamp can be bookmarked',async()=>{const t=bookmarkStoreFixture();await t.store.refreshBookmarks();const api=new protocol.Protocol({url:'https://fixture.example',username:'owner'},'');const item=api.parseMessages({data:[{id:'user-saved',type:'user',text:'Saved user request',time:{created:1}}]})[0];assert.equal(item.role,'user');assert.equal(await t.store.toggleBookmark(item),true);assert.equal(t.store.bookmarks[0].text,'Saved user request');});
 console.log(count + ' adapter/state tests passed.');

@@ -35,6 +35,7 @@ function load(file, key) {
   modules.set(key, exports);
   return exports;
 }
+load('entry/src/main/ets/domain/MessageBookmarks.ts', '../domain/MessageBookmarks');
 load('entry/src/main/ets/domain/PromptTemplates.ts', '../domain/PromptTemplates');
 load('entry/src/main/ets/domain/Attachments.ts', '../domain/Attachments');
 const core = load('entry/src/main/ets/domain/Core.ts', '../domain/Core');

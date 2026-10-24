@@ -1,3 +1,4 @@
+import { MessageBookmark, MessageBookmarkPort, EmptyMessageBookmarks, bookmarkID, bookmarkMessage } from '../domain/MessageBookmarks';
 import { appendPromptTemplate } from '../domain/PromptTemplates';
 import { ModelPreferences, emptyModelPreferences, enabledModels, setModelEnabled, setModelFavorite, rememberModel } from '../domain/ModelSelection';
 import { prepareConnection, sameConnectionIdentity, ConnectionInput } from '../domain/Connections';
@@ -174,6 +175,55 @@ export class AppStore {
   private draftRestored: boolean = false;
   draftNotice: string = '';
   attachDraftStore(store: TextDraftPort): void { this.textDraftStore = store; }
+  bookmarks: MessageBookmark[] = [];
+  bookmarksReady: boolean = false;
+  bookmarksBusy: boolean = false;
+  bookmarkSaving: boolean = false;
+  bookmarkError: string = '';
+  private bookmarkStore: MessageBookmarkPort = new EmptyMessageBookmarks();
+  private bookmarkEpoch: number = 0;
+  private bookmarkServerID: string = '';
+  private bookmarkScope: string = '';
+  private bookmarkAccount(config: ServerConfig | undefined): string { return config ? JSON.stringify([config.url.replace(/\/+$/, ''), config.username]) : ''; }
+  attachBookmarkStore(store: MessageBookmarkPort): void { this.bookmarkStore = store; }
+  private bookmarkConfig(): ServerConfig | undefined { return this.servers.find((s: ServerConfig): boolean => s.id === (this.connected || this.bookmarkServerID)) || this.api?.config; }
+  private resetBookmarks(): void { this.bookmarkScope = ''; this.bookmarkEpoch++; this.bookmarks = []; this.bookmarksReady = false; this.bookmarksBusy = false; this.bookmarkSaving = false; this.bookmarkError = ''; }
+  async refreshBookmarks(): Promise<void> {
+    const config = this.bookmarkConfig(); if (!config || this.networkBlocked) { this.resetBookmarks(); this.bookmarkError = '请先选择有效的服务器连接'; return; }
+    const scope = this.bookmarkAccount(config); if (scope !== this.bookmarkScope) { this.resetBookmarks(); this.bookmarkScope = scope; }
+    if (this.bookmarkSaving) { return; } const epoch = ++this.bookmarkEpoch; this.bookmarksBusy = true; this.bookmarkError = '';
+    try { const items = await this.bookmarkStore.bookmarks(config);
+      if (epoch === this.bookmarkEpoch && !this.networkBlocked && config === this.bookmarkConfig()) { this.bookmarks = items; this.bookmarksReady = true; }
+    } catch (_) { if (epoch === this.bookmarkEpoch) { this.bookmarksReady = false; this.bookmarkError = '收藏未能读取，请重试；原有内容仍保留'; } }
+    finally { if (epoch === this.bookmarkEpoch) { this.bookmarksBusy = false; } }
+  }
+  isBookmarked(messageID: string): boolean { return this.bookmarkScope === this.bookmarkAccount(this.bookmarkConfig()) && this.bookmarks.some((item: MessageBookmark): boolean => item.id === bookmarkID(this.directory, this.sessionID, messageID)); }
+  async toggleBookmark(message: ChatMessage): Promise<boolean> {
+    const config = this.bookmarkConfig(); if (!config || !this.sessionID || !this.bookmarksReady || this.bookmarksBusy || this.bookmarkSaving || this.networkBlocked || this.bookmarkScope !== this.bookmarkAccount(config)) { return false; }
+    const id = bookmarkID(this.directory, this.sessionID, message.id); const existing = this.bookmarks.find((item: MessageBookmark): boolean => item.id === id);
+    if (existing) { return this.removeMessageBookmark(id); }
+    let item: MessageBookmark;
+    try { item = bookmarkMessage(message, this.directory, this.sessionID, this.sessionTitle); } catch (e) { this.bookmarkError = (e as Error).message; return false; }
+    const epoch = this.bookmarkEpoch; this.bookmarkSaving = true; this.bookmarkError = '';
+    try { await this.bookmarkStore.saveBookmark(config, item);
+      if (epoch !== this.bookmarkEpoch || this.networkBlocked || config !== this.bookmarkConfig()) { return false; }
+      this.bookmarks = [item].concat(this.bookmarks); return true;
+    } catch (e) { if (epoch === this.bookmarkEpoch) { this.bookmarkError = (e as Error).message || '收藏未保存，请重试'; } return false; }
+    finally { if (epoch === this.bookmarkEpoch) { this.bookmarkSaving = false; } }
+  }
+  async removeMessageBookmark(id: string): Promise<boolean> {
+    const config = this.bookmarkConfig(); if (!config || this.bookmarkSaving || !this.bookmarksReady || this.networkBlocked || !this.bookmarks.some((item: MessageBookmark): boolean => item.id === id)) { return false; }
+    const epoch = this.bookmarkEpoch; this.bookmarkSaving = true; this.bookmarkError = '';
+    try { await this.bookmarkStore.removeBookmark(config, id); if (epoch !== this.bookmarkEpoch || config !== this.bookmarkConfig() || this.networkBlocked) { return false; }
+      this.bookmarks = this.bookmarks.filter((item: MessageBookmark): boolean => item.id !== id); return true;
+    } catch (_) { if (epoch === this.bookmarkEpoch) { this.bookmarkError = '未能取消收藏，请重试'; } return false; }
+    finally { if (epoch === this.bookmarkEpoch) { this.bookmarkSaving = false; } }
+  }
+  async openBookmarkSession(item: MessageBookmark): Promise<boolean> {
+    const config = this.bookmarkConfig(); if (!config || !this.canSendMessages() || !this.bookmarks.some((b: MessageBookmark): boolean => b.id === item.id)) { return false; }
+    return this.openNotificationTarget({ serverID: config.id, directory: item.directory, sessionID: item.sessionID, eventID: 'bookmark' });
+  }
+
   insertPromptTemplate(text: string): boolean {
     if (!this.sessionID || this.pendingSend || this.busy) { this.error = '请先打开会话，并完成当前发送确认'; return false; }
     try { const next = appendPromptTemplate(this.draft, text); this.updateDraft(next); this.error = ''; return true; }
@@ -363,7 +413,7 @@ export class AppStore {
   private fail(error: Error): void {
     this.error = error.message || '操作失败，请重新连接';
     if (error instanceof ApiError && [401, 403, 495].indexOf(error.code) >= 0) {
-      this.cacheEpoch++; this.draftNotice = '';
+      this.resetBookmarks(); this.cacheEpoch++; this.draftNotice = '';
       if (this.draftRestored) { this.draft = ''; this.draftNotice = ''; this.draftRestored = false; }
       const config = this.api?.config;
       if (config) { this.transcriptCache.removeServer(config).then((): void => { this.refreshCacheSize(); }).catch((): void => {}); }
@@ -770,6 +820,7 @@ export class AppStore {
   }
   disconnect(): boolean {
     if (!this.stashConversation()) { return false; }
+    this.resetBookmarks(); this.bookmarkServerID = '';
     this.pendingEpoch++; this.sessionsEpoch++; this.preferenceEpoch++; this.pendingItems = []; this.pendingError = ''; this.pendingUpdated = 0; this.pendingBusy = false;
     this.sessionCursor = ''; this.sessionQuery = ''; this.sessionsBusy = false; this.sessionsError = ''; this.sessionPreferences = [];
     this.sessionMutationBusy = false; this.sessionPreferenceBusy = false; this.runningSessions = []; this.runningUnknown = false; this.showArchived = false;
@@ -787,7 +838,7 @@ export class AppStore {
     this.reminderQuiet = ''; this.reminderQuietSeq = 0; return true;
   }
   async connect(config: ServerConfig): Promise<number | undefined> {
-    if (!this.disconnect()) { return; } const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true; let ownedGeneration = generation;
+    if (!this.disconnect()) { return; } this.bookmarkServerID = config.id; this.refreshBookmarks(); const generation = this.generation; this.error = ''; this.status = '正在连接'; this.busy = true; let ownedGeneration = generation;
     try {
       const password = await this.storage.secret(config.id);
       if (generation !== this.generation) { return; }
@@ -832,7 +883,7 @@ export class AppStore {
     } catch (e) { if (generation === this.generation) {
       this.status = '连接失败'; this.fail(e as Error);
       if (e instanceof ApiError && [401, 403, 495].indexOf(e.code) >= 0) {
-        this.cacheEpoch++; try { await this.transcriptCache.removeServer(config); this.refreshCacheSize(); } catch (_) {}
+        this.resetBookmarks(); this.cacheEpoch++; try { await this.transcriptCache.removeServer(config); this.refreshCacheSize(); } catch (_) {}
       } else { await this.restoreOffline(config, generation); }
     } }
     finally { if (generation === this.generation) { this.busy = false; } }

@@ -1,3 +1,5 @@
+import { MessageBookmarksPanel } from '../components/MessageBookmarksPanel';
+import { MessageBookmark } from '../domain/MessageBookmarks';
 import { PromptTemplatePanel } from '../components/PromptTemplatePanel';
 import { PromptTemplateStore } from '../presentation/PromptTemplateStore';
 import { PromptTemplateStorage } from '../data/PromptTemplateStorage';
@@ -105,7 +107,7 @@ struct Index {
     else { this.toast('分支已创建，可在会话列表打开'); }
   }
   private confirmRemoveServer(server: ServerConfig): void {
-    this.getUIContext().showAlertDialog({ title: '移除连接', message: '从本机移除“' + server.name + '”的配置、凭据和会话位置。服务器任务与聊天历史仍会保留。',
+    this.getUIContext().showAlertDialog({ title: '移除连接', message: '从本机移除“' + server.name + '”的配置、凭据和会话位置。服务器任务与聊天历史仍会保留。本机消息收藏也会保留，重新添加相同地址与账号后可查看。',
       primaryButton: { value: '取消', action: (): void => {} }, secondaryButton: { value: '移除', action: (): void => { this.store.removeServer(server.id); } } });
   }
   private confirmCompaction(): void {
@@ -144,10 +146,29 @@ struct Index {
     } catch (_) { this.store.error = '未能打开附件选择器，请稍后重试'; }
     finally { this.pickingAttachments = false; }
   }
-  private async openAttachment(item: Attachment): Promise<void> {
-    const scope = this.store.connected + '/' + this.store.sessionID; this.selectedAttachment = item; this.openSheet('attachment');
-    const preview = await this.store.attachmentPreview(item);
-    if (scope === this.store.connected + '/' + this.store.sessionID && this.sheetKind === 'attachment' && this.toolSheetOpen) { this.selectedAttachment = preview; }
+  private async openAttachment(item: Attachment, draft: boolean = false): Promise<void> {
+    const epoch = ++this.attachmentEpoch; const scope = this.store.exportScope(); this.draftPreview = draft;
+    this.selectedAttachment = item; this.openSheet('attachment');
+    const preview = draft ? item : await this.store.attachmentPreview(item);
+    if (epoch === this.attachmentEpoch && scope === this.store.exportScope() && this.panelVisible('attachment') && this.selectedAttachment.id === item.id) { this.selectedAttachment = preview; }
+  }
+  private previewIndex(): number { return this.store.attachments.findIndex((item: Attachment): boolean => item.id === this.selectedAttachment.id); }
+  private stepPreview(offset: number): void { const next = this.store.attachments[this.previewIndex() + offset]; if (next && this.draftPreview) { this.openAttachment(next, true); } }
+  private removePreview(): void {
+    if (!this.draftPreview || this.store.pendingSend || this.store.busy) { return; }
+    const index = this.previewIndex(); this.store.removeAttachment(this.selectedAttachment.id);
+    const next = this.store.attachments[Math.min(index, this.store.attachments.length - 1)]; if (next) { this.openAttachment(next, true); } else { this.closePanel(); }
+  }
+  private async favoriteMessage(message: ChatMessage): Promise<void> {
+    const previous = this.store.isBookmarked(message.id);
+    if (await this.store.toggleBookmark(message)) { this.toast(previous ? '已取消收藏' : '已加密收藏消息正文'); }
+    else { this.toast(this.store.bookmarkError || '收藏暂不可用，请在消息收藏页重新读取'); }
+  }
+  private async bookmarkContext(item: MessageBookmark): Promise<void> {
+    if (await this.store.openBookmarkSession(item)) {
+      if (this.store.messages.some((message: ChatMessage): boolean => message.id === item.messageID)) { this.locateMessage({ id: item.messageID, label: '', role: item.role, before: '', match: '', after: '' }); }
+      else { this.navigate('chat'); this.toast('已打开原会话，更早消息可按需加载查找'); }
+    }
   }
   @StorageLink('appearanceMode') appearanceMode: string = 'system';
   @StorageLink('appearanceDark') darkAppearance: boolean = false;
@@ -164,6 +185,9 @@ struct Index {
   @State private compactSheetMaterial: SystemUiMaterial | undefined = undefined;
   @State sessionSearch: string = '';
   @State focusedMessage: string = '';
+  @State bookmarkDetailID: string = '';
+  private attachmentEpoch: number = 0;
+  @State draftPreview: boolean = false;
   private locateMessage(hit: ConversationHit): void {
     const scope = this.store.exportScope(); const index = this.store.messages.findIndex((m: ChatMessage) => m.id === hit.id);
     if (index < 0) { this.toast('消息已移出加载范围，请重新查找'); return; }
@@ -207,7 +231,7 @@ struct Index {
       this.reminders.load();
       this.store.attachNotifier(this.reminders, this.foreground);
       const cache = new TranscriptCache();
-      cache.init(context as common.Context).then((): void => { this.store.attachCache(cache); this.store.attachDraftStore(cache); })
+      cache.init(context as common.Context).then((): void => { this.store.attachCache(cache); this.store.attachDraftStore(cache); this.store.attachBookmarkStore(cache); })
         .catch((): void => { this.store.cacheNotice = '加密缓存暂不可用，仍可正常联网使用'; })
         .then((): Promise<void> => this.store.init(context as common.Context))
         .then((): void => { this.appReady = true; this.consumeNotificationLaunch(); this.tryConsumeLaunch(); });
@@ -222,6 +246,7 @@ struct Index {
       this.quietNotice = this.store.reminderQuiet ? this.reminderQuietText(this.store.reminderQuiet) : '';
     }
     this.tryConsumeLaunch();
+    if (['认证失败', '证书校验失败'].indexOf(this.store.status) >= 0 && this.panelVisible('attachment') && !this.draftPreview) { this.closePanel(); }
     if (!this.store.models.length || this.store.pane !== 'chat') { this.closePopups(); }
     const session = this.store.connected + '/' + this.store.sessionID;
     if (session !== this.viewSession) { this.closePopups(); if (this.store.pane.startsWith('panel-') && this.store.pane !== 'panel-prompts' && this.panelScope !== session) { this.store.pane = 'chat'; } this.viewSession = session; this.focusedMessage = ''; this.viewContent = ''; this.sessionSearch = ''; this.reasoningOpen = []; this.reasoningClosed = []; this.activeReasoning = []; if (this.sheetKind === 'tool' || this.sheetKind === 'session' || this.sheetKind === 'attachment' || this.sheetKind === 'model' || this.sheetKind === 'agent' || this.sheetKind === 'export' || this.sheetKind === 'fork' || this.sheetKind === 'usage') { this.toolSheetOpen = false; } this.follow = true; this.quietNotice = ''; this.reminders.refreshPermission(); }
@@ -259,12 +284,13 @@ struct Index {
   private panelVisible(kind: string): boolean { return (kind === 'model' && this.modelPopupOpen) || this.store.pane === 'panel-' + kind || (this.toolSheetOpen && this.sheetKind === kind); }
   private closePanel(): void {
     this.dismissKeyboard(); this.toolSheetOpen = false; this.closePopups();
+    this.attachmentEpoch++; this.selectedAttachment = { id: '', name: '', mime: '', data: '', size: 0 };
     if (this.store.pane === 'panel-export' && this.store.exporting) { this.store.cancelExport(); }
     if (this.store.pane.startsWith('panel-')) { this.store.pane = this.panelReturn; }
   }
   private openSheet(kind: string): void {
     this.dismissKeyboard(); this.closePopups(); this.sheetKind = kind;
-    if (['agent', 'usage', 'fork', 'export', 'tool', 'search', 'prompts'].indexOf(kind) >= 0) {
+    if (['agent', 'usage', 'fork', 'export', 'tool', 'search', 'prompts', 'bookmarks', 'attachment'].indexOf(kind) >= 0) {
       this.panelReturn = this.store.pane === 'more' ? 'more' : 'chat';
       this.panelScope = this.store.connected + '/' + this.store.sessionID;
       this.toolSheetOpen = false; this.store.pane = 'panel-' + kind;
@@ -286,6 +312,8 @@ struct Index {
   }
   private pageTitle(name: string): string {
     if (name === 'model-library') { return this.modelLibraryFavorites ? '喜爱模型' : '启用模型'; }
+    if (name === 'panel-bookmarks') { return this.bookmarkDetailID ? '收藏详情' : '消息收藏'; }
+    if (name === 'panel-attachment') { return this.draftPreview ? '发送前预览' : '附件预览'; }
     if (name === 'panel-prompts') { return this.promptLibrary.editing ? (this.promptLibrary.editID ? '编辑提示词' : '新建提示词') : '常用提示词'; }
     if (name === 'panel-search') { return '查找对话'; }
     if (name === 'panel-agent') { return '选择 Agent'; }
@@ -521,7 +549,7 @@ struct Index {
               Text('清除已保存密码').id('server-clear-password-label').fontSize(16).fontColor(C.secondary).layoutWeight(1).constraintSize({ minHeight: 40 })
               .onClick(() => { if (!this.store.serverSaving && !this.store.busy) { this.store.clearServerPassword = !this.store.clearServerPassword; } })
             }.width('100%')
-            Text('修改地址或账号会清理此连接旧的本机会话位置、书签与模型偏好。密码留空会保留原密码。').fontSize(12).fontColor(C.muted).width('100%')
+            Text('修改地址或账号会清理此连接旧的本机会话位置、置顶/归档与模型偏好。密码留空会保留原密码。').fontSize(12).fontColor(C.muted).width('100%')
             Button('取消编辑').id('server-cancel-edit').height(30).fontSize(14).buttonStyle(ButtonStyleMode.TEXTUAL).fontColor(C.secondary)
               .enabled(!this.store.serverSaving).onClick(() => { this.store.resetServerForm(); this.store.error = ''; this.store.serverNotice = ''; })
           }
@@ -609,7 +637,7 @@ struct Index {
   private async pickSession(session: SessionItem): Promise<void> { this.dismissKeyboard(); this.closePopups(); this.sidebarOpen = false; this.follow = true; await this.store.openSession(session); }
   @Builder
   messageCard(message: ChatMessage) {
-    ConversationMessage({ message: message, thinking: reasoningInProgress(message), reasoningExpanded: this.reasoningExpanded(message),
+    ConversationMessage({ message: message, bookmarked: this.store.isBookmarked(message.id), bookmarkEnabled: this.store.bookmarksReady && !this.store.bookmarksBusy && !this.store.bookmarkSaving && (message.role === 'user' || ['completed', 'failed'].indexOf(message.state) >= 0) && (!!message.text.trim() || !!message.files?.length), onBookmark: (): void => { this.favoriteMessage(message); }, thinking: reasoningInProgress(message), reasoningExpanded: this.reasoningExpanded(message),
       onFork: (edit: boolean): void => { this.openFork(message, edit); }, onToggleReasoning: (): void => { this.toggleReasoning(message); },
       onTool: (tool: ToolItem): void => { this.follow = false; this.selectedTool = tool; this.openSheet('tool'); },
       onAttachment: (item: Attachment): void => { this.openAttachment(item); }, onOpenLink: (url: string): void => { this.openLink(url); }, onCopy: (text: string): void => { this.copy(text); } })
@@ -740,7 +768,7 @@ struct Index {
       Column({ space: 6 }) {
         if (this.store.attachments.length) {
           AttachmentStrip({ items: this.store.attachments, editable: true, locked: this.pickingAttachments || !!this.store.pendingSend || this.store.busy,
-            onOpen: (item: Attachment): void => { this.openAttachment(item); }, onRemove: (id: string): void => { this.store.removeAttachment(id); }, onRetry: (item: Attachment): void => { this.pickAttachments(false, item); } })
+            onOpen: (item: Attachment): void => { this.openAttachment(item, true); }, onRemove: (id: string): void => { this.store.removeAttachment(id); }, onRetry: (item: Attachment): void => { this.pickAttachments(false, item); } })
           if (attachmentProblem(this.store.attachments, this.store.attachmentInput())) { Text(attachmentProblem(this.store.attachments, this.store.attachmentInput())).fontSize(12).fontColor(C.warning).width('100%') }
         }
         if ((this.store.messages.length > 0 && (!this.follow || this.store.readingHistory || this.store.newerAvailable)) || this.store.interactions.length || (this.store.working && (!!this.store.draft.trim() || !!this.store.attachments.length))) {
@@ -1012,7 +1040,8 @@ struct Index {
   sheetContent() { this.panelContent(this.sheetKind) }
   @Builder
   panelContent(kind: string) {
-    if (kind === 'prompts') { PromptTemplatePanel({ library: this.promptLibrary, canInsert: !!this.store.sessionID && !this.store.pendingSend && !this.store.busy && !this.pickingAttachments, onInsert: (text: string): void => { this.insertPrompt(text); }, onCancel: (): void => { this.cancelPromptEdit(); } }) }
+    if (kind === 'bookmarks') { MessageBookmarksPanel({ store: this.store, selectedID: $bookmarkDetailID, onContext: (item: MessageBookmark): void => { this.bookmarkContext(item); }, onCopy: (text: string): void => { this.copy(text); }, onLink: (url: string): void => { this.openLink(url); } }) }
+    else if (kind === 'prompts') { PromptTemplatePanel({ library: this.promptLibrary, canInsert: !!this.store.sessionID && !this.store.pendingSend && !this.store.busy && !this.pickingAttachments, onInsert: (text: string): void => { this.insertPrompt(text); }, onCancel: (): void => { this.cancelPromptEdit(); } }) }
     else if (kind === 'search') { ConversationSearchPanel({ messages: this.store.messages, hasEarlier: !!this.store.cursor, canLoad: this.store.canSearchEarlier(), busy: this.store.busy, onSelect: (hit: ConversationHit): void => { this.locateMessage(hit); }, onEarlier: (): void => { this.store.older(); } }) }
     else if (kind === 'tool') { this.toolDetails() }
     else if (kind === 'agent') { AgentPicker({ agents: this.store.agents, current: this.store.agentID, busy: this.store.agentBusy, loading: this.store.agentLoading, error: this.store.agentError, blocked: this.store.agentUncertain ? '请先重新读取，确认当前 Agent。' : this.store.working || this.store.pendingSend || this.store.interactions.length || this.store.permissionError ? '请先结束当前任务并处理问题或审批。' : '', onSelect: (id: string): void => { this.selectAgent(id); }, onRefresh: (): void => { this.store.refreshAgentState(); } }) }
@@ -1026,7 +1055,7 @@ struct Index {
       contextLimit: this.store.models.find((model: ModelItem) => model.id === this.store.modelID)?.contextLimit ?? -1, loading: this.store.usageLoading, busy: this.store.compactionBusy, compact: this.store.compaction, error: this.store.usageError,
       blocked: this.store.working || !!this.store.pendingSend || !!this.store.interactions.length || !!this.store.permissionError || this.store.forkBusy || this.store.agentBusy, onRefresh: (): void => { this.store.refreshUsage(); }, onCompact: (): void => { this.confirmCompaction(); } }) }
     else if (kind === 'export') { ExportPanel({ busy: this.store.exporting, saving: this.savingExport, count: this.store.exportCount, error: this.store.exportError, notice: this.exportNotice, onExport: (format: string, tools: boolean): void => { this.exportConversation(format, tools); }, onCancel: (): void => { this.store.cancelExport(); } }) }
-    else if (kind === 'attachment') { AttachmentPreview({ item: this.selectedAttachment, saving: this.savingAttachment, onSave: (item: Attachment): void => { this.saveAttachment(item); }, onCopy: (text: string): void => { this.copy(text); } }) }
+    else if (kind === 'attachment') { AttachmentPreview({ item: this.selectedAttachment, saving: this.savingAttachment, editable: this.draftPreview && !this.store.pendingSend && !this.store.busy && !this.pickingAttachments, attachmentPosition: this.draftPreview ? (this.previewIndex() + 1) + ' / ' + this.store.attachments.length : '', hasPrevious: this.draftPreview && this.previewIndex() > 0, hasNext: this.draftPreview && this.previewIndex() < this.store.attachments.length - 1, onPrevious: (): void => { this.stepPreview(-1); }, onNext: (): void => { this.stepPreview(1); }, onRemove: (): void => { this.removePreview(); }, onSave: (item: Attachment): void => { this.saveAttachment(item); }, onCopy: (text: string): void => { this.copy(text); } }) }
     else if (kind === 'session') { this.sessionActions() }
     else { this.moreFunctions() }
   }
@@ -1053,6 +1082,7 @@ struct Index {
         Column({ space: 0 }) {
           Text('当前对话').fontSize(12).fontWeight(FontWeight.Medium).fontColor(C.secondary).width('100%').padding({ bottom: 8 })
           Column({ space: 0 }) {
+          this.actionRow('open-bookmarks', $r('sys.symbol.star'), '消息收藏', '查看保存在本机的消息正文', true, (): void => { this.bookmarkDetailID = ''; this.openSheet('bookmarks'); this.store.refreshBookmarks(); })
           this.actionRow('open-prompts', $r('sys.symbol.doc_text'), '常用提示词', '本机加密保存，插入后自行确认发送', true, (): void => { this.openSheet('prompts'); })
           this.actionRow('open-search', $r('sys.symbol.magnifyingglass'), '查找对话', '查找已加载消息并返回上下文', !!this.store.sessionID, (): void => { this.follow = false; this.openSheet('search'); })
           this.actionRow('open-usage', $r('sys.symbol.code_square'), '上下文与用量', '查看模型上限、Token 与费用', !!this.store.sessionID, (): void => { this.openSheet('usage'); this.store.refreshUsage(); })
@@ -1228,7 +1258,7 @@ struct Index {
         .fontSize(14).lineHeight(21).fontColor(C.secondary).width('100%')
       Button(this.store.cacheBusy ? '正在清理…' : '清空本机缓存').id('clear-local-cache').width('100%').height(44)
         .fontSize(15).buttonStyle(ButtonStyleMode.NORMAL).enabled(!this.store.cacheBusy)
-        .onClick(() => { this.getUIContext().showAlertDialog({ title: '清空本机缓存', message: '清理本机缓存与已保存的文本草稿，当前输入保留。服务器聊天、模型和文件都会保留。',
+        .onClick(() => { this.getUIContext().showAlertDialog({ title: '清空本机缓存', message: '清理本机缓存与已保存的文本草稿，当前输入保留。消息收藏、常用提示词以及服务器聊天、模型和文件都会保留。',
           primaryButton: { value: '取消', action: (): void => {} },
           secondaryButton: { value: '清理', action: (): void => { this.store.clearCache(); } } }); })
       if (this.store.cacheNotice) { Text(this.store.cacheNotice).id('cache-notice').fontSize(13).fontColor(C.secondary).width('100%') }
@@ -1419,7 +1449,7 @@ struct Index {
       }.height('100%').width('100%').backgroundColor(C.page)
     }.id('native-destination').title(this.pageTitle(name))
       .systemBarStyle({ statusBarContentColor: this.darkAppearance ? '#EDEEF0' : '#15171C' })
-      .backgroundColor(C.page).onBackPressed((): boolean => { if (name === 'panel-prompts' && this.promptLibrary.editing) { this.cancelPromptEdit(); } else if (name.startsWith('panel-')) { this.closePanel(); } else { this.store.pane = name === 'provider-auth' || name === 'model-library' ? 'settings' : 'chat'; } return true; })
+      .backgroundColor(C.page).onBackPressed((): boolean => { if (name === 'panel-bookmarks' && this.bookmarkDetailID) { this.bookmarkDetailID = ''; } else if (name === 'panel-prompts' && this.promptLibrary.editing) { this.cancelPromptEdit(); } else if (name.startsWith('panel-')) { this.closePanel(); } else { this.store.pane = name === 'provider-auth' || name === 'model-library' ? 'settings' : 'chat'; } return true; })
   }
   build() {
     SideBarContainer(this.wide ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
