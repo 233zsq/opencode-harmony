@@ -14,7 +14,7 @@ function geometry(){
  assert.ok(title[1]>=list[1]&&title[3]<=heading[3]&&title[2]<agent[0],'Title and Agent capsules must fit without overlap');
  assert.ok(Math.abs(composer[3]-stage[3])<=2,'Composer must stay anchored at the bottom of the chat');
  assert.ok(status[1]>=field[3]-1&&status[3]<=stage[3]+1,'Status belongs below the input, in its lower inset');
- assert.ok((composer[3]-field[3])/density<=11,'Status must not reserve a new row that raises the composer');
+ assert.ok((composer[3]-field[3])/density<=15,'The readable status footer must remain within its compact 14vp inset');
  assert.ok(Math.abs((add[1]+add[3]-send[1]-send[3])/2)<=density,'Plus and send buttons must share a vertical center');
  assert.ok((draft[3]-draft[1])/density<=48,'Empty input must remain compact');
  return{stage,list,field,status,heading};
