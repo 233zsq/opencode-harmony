@@ -184,6 +184,10 @@ struct Index {
   @State private modelMaterial: SystemUiMaterial | undefined = undefined;
   @State private compactSheetMaterial: SystemUiMaterial | undefined = undefined;
   @State sessionSearch: string = '';
+  @State historySearching: boolean = false;
+  private historySearchEpoch: number = 0;
+  private historySearchQuery: string = '';
+  private historySearchScope: string = '';
   @State focusedMessage: string = '';
   @State bookmarkDetailID: string = '';
   private attachmentEpoch: number = 0;
@@ -369,6 +373,13 @@ struct Index {
   private serverName(): string {
     const server = this.store.servers.find((item: ServerConfig) => item.id === this.store.connected);
     return server?.name || '未连接';
+  }
+  private connectionColor(): ResourceColor {
+    const status = this.store.status;
+    if (['认证失败', '证书校验失败', '连接失败'].indexOf(status) >= 0) { return C.danger; }
+    if (this.store.cacheRestored || ['正在连接', '重新连接中', '离线缓存', '后台暂停连接'].indexOf(status) >= 0) { return C.warning; }
+    if (this.store.connected && this.store.canSendMessages() && ['实时连接', '已连接'].indexOf(status) >= 0) { return C.success; }
+    return C.muted;
   }
   private foregroundChanged(): void {
     this.reminders.refreshPermission();
@@ -685,26 +696,42 @@ struct Index {
   private chatStatus(): string {
     if (this.store.cacheRestored) { return '本机缓存 · 正在等待联网核对'; }
     if (this.pickingAttachments) { return '正在读取附件…'; }
-    if (this.store.pendingSend) { return '发送结果待核对 · 点击同步'; }
+    if (this.store.pendingSend) { return '发送结果待核对'; }
     if (this.store.interrupting) { return '正在停止…'; }
-    if (this.store.modelUncertain) { return '模型设置待确认 · 点击核对'; }
+    if (this.store.modelUncertain) { return '模型设置待确认'; }
     if (this.store.agentUncertain) { return 'Agent 待确认'; }
-    if (this.store.interactions.length) { return '有 ' + this.store.interactions.length + ' 项待处理 · 点击查看'; }
+    if (this.store.interactions.length) { return '有 ' + this.store.interactions.length + ' 项待处理'; }
     if (this.store.working) { return '正在生成…'; }
     if (this.store.draftNotice) { return this.store.draftNotice; }
-    if (this.quietNotice) { return this.quietNotice + ' · 点击收起'; }
+    if (this.quietNotice) { return this.quietNotice; }
     return this.store.status || '未连接';
+  }
+  private composerStatusAction(): string {
+    if (this.store.cacheRestored || this.pickingAttachments || this.store.interrupting) { return ''; }
+    if (this.store.pendingSend || this.store.modelUncertain) { return 'sync'; }
+    if (this.store.agentUncertain) { return ''; }
+    if (this.store.interactions.length) { return 'pending'; }
+    if (this.store.working || this.store.draftNotice) { return ''; }
+    return this.quietNotice ? 'dismiss' : '';
+  }
+  private composerActionLabel(): string {
+    const action = this.composerStatusAction();
+    if (action === 'sync') { return this.store.pendingSend ? '同步核对' : '核对模型'; }
+    if (action === 'pending') { return '待处理 ' + this.store.interactions.length; }
+    return action === 'dismiss' ? '收起提示' : '';
+  }
+  private performComposerStatusAction(): void {
+    const action = this.composerStatusAction();
+    if (action === 'sync' && !this.store.busy && this.store.canSendMessages()) { this.store.sync(); }
+    else if (action === 'pending') { this.navigate('pending'); }
+    else if (action === 'dismiss') { this.quietNotice = ''; }
   }
   @Builder
   composerStatus() {
-    Text(this.chatStatus()).id(this.store.pendingSend ? 'verify-send' : 'chat-status').fontSize(9).lineHeight(10).fontColor(C.secondary).maxLines(1)
-      .textOverflow({ overflow: TextOverflow.Ellipsis }).width('88%').height(10).textAlign(TextAlign.Center)
-      .position({ x: '50%', y: '100%' }).translate({ x: '-50%', y: -10 })
-      .accessibilityText(this.chatStatus()).onClick(() => {
-        if ((this.store.pendingSend || this.store.modelUncertain) && !this.store.busy) { this.store.sync(); }
-        else if (this.store.interactions.length) { this.navigate('pending'); }
-        else if (this.quietNotice) { this.quietNotice = ''; }
-      })
+    Text(this.chatStatus()).id('chat-status').fontSize(11).lineHeight(14).fontColor(C.secondary).maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis }).width('88%').height(14).textAlign(TextAlign.Center)
+      .position({ x: '50%', y: '100%' }).translate({ x: '-50%', y: -14 })
+      .accessibilityText(this.chatStatus())
   }
   @Builder
   chatHeading() {
@@ -774,7 +801,7 @@ struct Index {
             onOpen: (item: Attachment): void => { this.openAttachment(item, true); }, onRemove: (id: string): void => { this.store.removeAttachment(id); }, onRetry: (item: Attachment): void => { this.pickAttachments(false, item); } })
           if (attachmentProblem(this.store.attachments, this.store.attachmentInput())) { Text(attachmentProblem(this.store.attachments, this.store.attachmentInput())).fontSize(12).fontColor(C.warning).width('100%') }
         }
-        if ((this.store.messages.length > 0 && (!this.follow || this.store.readingHistory || this.store.newerAvailable)) || this.store.interactions.length || (this.store.working && (!!this.store.draft.trim() || !!this.store.attachments.length))) {
+        if ((this.store.messages.length > 0 && (!this.follow || this.store.readingHistory || this.store.newerAvailable)) || this.composerStatusAction() || (this.store.working && (!!this.store.draft.trim() || !!this.store.attachments.length))) {
           Row({ space: 8 }) {
             if (this.store.messages.length > 0 && (!this.follow || this.store.readingHistory || this.store.newerAvailable)) {
               Button({ type: ButtonType.Capsule }) {
@@ -788,17 +815,20 @@ struct Index {
                 .onClick(() => { this.follow = true; if (this.store.readingHistory) { this.store.latest(); } else { this.scroller.scrollEdge(Edge.Bottom); } })
             }
             Blank()
-            if (this.store.interactions.length) {
-              Button('待处理 ' + this.store.interactions.length).id('pending-interactions').fontSize(12).fontFamily('monospace').height(28)
-                .backgroundColor(C.warning_bg).fontColor(C.warning).borderRadius(8)
-                .onClick(() => { this.follow = false; this.scroller.scrollEdge(Edge.Bottom); })
+            if (this.composerStatusAction()) {
+              Button(this.composerActionLabel(), { type: ButtonType.Capsule })
+                .id(this.store.pendingSend ? 'verify-send' : this.composerStatusAction() === 'pending' ? 'pending-interactions' : 'composer-status-action')
+                .fontSize(13).height(40).padding({ left: 14, right: 14 }).backgroundColor(C.warning_bg).fontColor(C.warning)
+                .accessibilityText(this.chatStatus() + '，' + this.composerActionLabel())
+                .enabled(this.composerStatusAction() !== 'sync' || (!this.store.busy && this.store.canSendMessages()))
+                .onClick(() => { this.performComposerStatusAction(); })
             }
             if (this.store.working && (this.store.draft.trim() || this.store.attachments.length)) {
-              Button('停止生成').id('stop-secondary').fontSize(14).height(28)
+              Button('停止生成').id('stop-secondary').fontSize(14).height(40)
                 .backgroundColor(Color.Transparent).fontColor(C.danger).enabled(!this.store.interrupting)
                 .onClick(() => { this.store.interrupt(); })
             }
-          }.width('100%').height(36)
+          }.width('100%').height(40)
         }
         Row({ space: 6 }) {
           Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.plus')).fontSize(18).fontColor([C.secondary]) }
@@ -837,7 +867,7 @@ struct Index {
           Text(String(this.store.draft.length) + ' / 20000').fontSize(12).fontFamily('monospace').fontColor(C.muted)
             .width('100%').textAlign(TextAlign.End)
         }
-      }.id('chat-composer').padding({ left: 16, right: 16, top: 8, bottom: 10 }).width('100%').constraintSize({ maxWidth: 860 })
+      }.id('chat-composer').padding({ left: 16, right: 16, top: 8, bottom: 14 }).width('100%').constraintSize({ maxWidth: 860 })
         .align(Alignment.Bottom)
         .onAreaChange((_old: Area, area: Area): void => { const height = Number(area.height); if (Math.abs(this.composerHeight - height) > 0.5) { this.composerHeight = height; } })
       this.composerStatus()
@@ -931,6 +961,27 @@ struct Index {
     }.layoutWeight(1).align(Alignment.TopStart).scrollBar(BarState.Off)
   }
   private sidebarWidth(): number { return this.wide ? 280 : Math.min(320, this.viewportWidth * 0.84); }
+  private canSearchHistory(): boolean { return !!this.store.directory && this.store.canSendMessages(); }
+  private async searchServerHistory(value: string): Promise<void> {
+    if (!this.canSearchHistory()) { return; }
+    const query = value.trim().slice(0, 200);
+    const scope = this.store.connected + '\n' + this.store.directory;
+    if (this.historySearching && this.historySearchQuery === query && this.historySearchScope === scope) { return; }
+    this.dismissKeyboard();
+    const epoch = ++this.historySearchEpoch;
+    this.historySearching = true; this.historySearchQuery = query; this.historySearchScope = scope;
+    try { await this.store.refreshSessions(false, query); }
+    finally { if (epoch === this.historySearchEpoch) { this.historySearching = false; } }
+  }
+  private clearHistorySearch(): void {
+    this.sessionSearch = ''; this.dismissKeyboard();
+    if (this.store.sessionQuery || this.historySearching) { this.searchServerHistory(''); }
+  }
+  private historySearchChanged(value: string): void {
+    const changed = this.sessionSearch !== value;
+    this.sessionSearch = value;
+    if (changed && !value.trim()) { this.clearHistorySearch(); }
+  }
   @Builder
   historyMenu() {
     Menu() {
@@ -945,6 +996,8 @@ struct Index {
   }
   @Builder
   sidebar(width: number) {
+    // Clip the material surface without clipping the rounded shadow around it.
+    Stack() {
     Column({ space: 0 }) {
       Row({ space: 8 }) {
         Button({ type: ButtonType.Normal }) {
@@ -960,17 +1013,28 @@ struct Index {
           .enabled(!this.store.busy).onClick(() => { this.newChat(); })
       }.width('100%').padding({ top: 4, bottom: 8 })
       Row({ space: 0 }) {
-        TextInput({ placeholder: '搜索对话', text: this.sessionSearch }).id('history-search').fontSize(14).height(40)
+        TextInput({ placeholder: this.store.sessionQuery ? '筛选搜索结果' : '筛选已加载对话', text: this.sessionSearch }).id('history-search').fontSize(14).height(40).maxLength(200)
           .fontColor(C.text).placeholderColor(C.muted).backgroundColor(Color.Transparent).layoutWeight(1)
-          .enterKeyType(EnterKeyType.Search).onChange((value: string) => { this.sessionSearch = value; })
-          .onSubmit(() => { if (!this.store.sessionsBusy && this.store.directory) { this.dismissKeyboard(); this.store.refreshSessions(false, this.sessionSearch); } })
-        Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(16).fontColor([C.secondary]) }
-          .id('history-search-server').accessibilityText('搜索服务器历史').width(40).height(40).backgroundColor(Color.Transparent)
-          .enabled(!this.store.sessionsBusy && !!this.store.directory)
-          .onClick(() => { this.dismissKeyboard(); this.store.refreshSessions(false, this.sessionSearch); })
+          .cancelButton({ style: CancelButtonStyle.INVISIBLE })
+          .enterKeyType(EnterKeyType.Search).onChange((value: string) => { this.historySearchChanged(value); })
+          .onSubmit(() => { this.searchServerHistory(this.sessionSearch); })
+        if (this.sessionSearch || this.store.sessionQuery || this.historySearching) {
+          Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.xmark')).fontSize(14).fontColor([C.secondary]) }
+            .id('history-clear-search').accessibilityText('清除筛选并退出服务器搜索').width(40).height(40).backgroundColor(Color.Transparent)
+            .onClick(() => { this.clearHistorySearch(); })
+        }
+        Button({ type: ButtonType.Normal }) {
+          Row({ space: 3 }) {
+            SymbolGlyph($r('sys.symbol.magnifyingglass')).fontSize(14).fontColor([C.accent])
+            Text('全部').fontSize(12).fontColor(C.accent)
+          }
+        }.id('history-search-server').accessibilityText('搜索服务器全部历史').width(56).height(40).padding(0).backgroundColor(Color.Transparent).borderRadius(12)
+          .enabled(this.canSearchHistory() && !this.historySearching)
+          .onClick(() => { this.searchServerHistory(this.sessionSearch); })
       }.width('100%').backgroundColor(C.field).borderRadius(16).margin({ bottom: 10 })
-      if (this.store.sessionQuery) {
-        Text('服务器搜索：' + this.store.sessionQuery).fontSize(12).fontColor(C.muted).maxLines(1).width('100%').padding({ left: 8, bottom: 6 })
+      if (this.store.sessionQuery || this.historySearching) {
+        Text(this.historySearching ? '正在读取服务器历史…' : '服务器搜索：' + this.store.sessionQuery + ' · 点 × 退出')
+          .fontSize(12).fontColor(C.secondary).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%').padding({ left: 8, bottom: 6 })
       }
       Scroll() {
         Column({ space: 3 }) {
@@ -996,12 +1060,12 @@ struct Index {
       Row({ space: 10 }) {
         Stack() {
           SymbolGlyph($r('sys.symbol.dot_radiowaves_left_and_right_badge_person_filled')).fontSize(16)
-            .fontColor([this.store.connected ? C.accent : C.muted])
-        }.width(30).height(30).backgroundColor(C.accent_soft).borderRadius(9)
+            .fontColor([this.connectionColor()])
+        }.width(30).height(30).backgroundColor(C.field).borderRadius(9)
         Column({ space: 4 }) {
           Text(this.serverName()).fontSize(14).fontColor(C.text).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           Row({ space: 5 }) {
-            StatusLed({ color: this.store.connected ? C.success : C.muted })
+            StatusLed({ color: this.connectionColor() })
             Text(this.store.status).fontSize(12).fontColor(C.secondary).maxLines(1)
           }
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
@@ -1011,6 +1075,9 @@ struct Index {
     }.id('history-sidebar').padding({ left: 14, right: 14, bottom: 12 }).width(width).height('100%')
       .backgroundEffect({ radius: 38, saturation: 1.15, brightness: 1.0, color: C.glass_fill })
       .border({ width: { right: 0.5 }, color: C.glass_stroke })
+      .borderRadius({ topRight: this.wide ? 0 : 24, bottomRight: this.wide ? 0 : 24 }).clip(true)
+    }.width(width).height('100%').backgroundColor(Color.Transparent)
+      .borderRadius({ topRight: this.wide ? 0 : 24, bottomRight: this.wide ? 0 : 24 })
       .shadow({ radius: 22, color: C.glass_shadow, offsetX: 8, offsetY: 0 })
   }
   @Builder
@@ -1483,15 +1550,16 @@ struct Index {
           }.id('model-anchor-layer').height(36).position({ x: this.sidebarOpen ? 16 : 60, y: 10 })
         }
         if (this.sidebarOpen && !this.wide) {
+          // Consume outside taps without a scrim appearing before the native slide animation.
           Column().id('sidebar-dismiss').width(Math.max(44, this.viewportWidth - this.sidebarWidth())).height('100%')
-            .position({ x: this.sidebarWidth(), y: 0 }).backgroundColor('#14000000')
+            .position({ x: this.sidebarWidth(), y: 0 }).backgroundColor(Color.Transparent)
             .accessibilityText('收起历史对话').accessibilityLevel('yes').onClick(() => { this.dismissKeyboard(); this.sidebarOpen = false; })
         }
       }.width('100%').height('100%')
     }.id('native-sidebar-container').showSideBar(this.sidebarOpen).showControlButton(!this.sidebarOpen && this.store.pane === 'chat')
       .controlButton({ left: 16, top: 16, width: 24, height: 24 })
       .sideBarWidth(this.sidebarWidth()).minSideBarWidth(220).maxSideBarWidth(320)
-      .divider({ strokeWidth: 1, color: C.separator }).onChange((show: boolean) => { this.dismissKeyboard(); this.sidebarOpen = show; })
+      .divider({ strokeWidth: this.wide ? 1 : 0, color: C.separator }).onChange((show: boolean) => { this.dismissKeyboard(); this.sidebarOpen = show; })
       .width('100%').height('100%').backgroundColor(C.page).expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .onAreaChange((oldArea: Area, newArea: Area) => {
         this.viewportWidth = Number(newArea.width); this.viewportHeight = Number(newArea.height); const wide = this.viewportWidth >= 840; if (this.wide !== wide) { this.wide = wide; this.sidebarOpen = wide; }
