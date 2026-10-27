@@ -1,21 +1,17 @@
 import https from 'node:https';
 import tls from 'node:tls';
-import {readFileSync} from 'node:fs';
-import {resolve} from 'node:path';
 import {createHash,X509Certificate} from 'node:crypto';
-const root=resolve(import.meta.dirname,'..');
-export const endpoint=process.env.OPENCODE_TEST_URL;
-if(!endpoint?.startsWith('https://'))throw new Error('Set OPENCODE_TEST_URL to dedicated server');
-const env=Object.fromEntries(readFileSync(resolve(root,'.server-access/server.env'),'utf8').trim().split(/\r?\n/).map(line=>{const i=line.indexOf('=');return[line.slice(0,i),line.slice(i+1)];}));
-const ca=readFileSync(resolve(root,'.server-access/tls/ca.pem'),'utf8');
-const pin=JSON.parse(readFileSync(resolve(root,'.server-access/tls/public-trust.json'),'utf8')).pin;
-const auth='Basic '+Buffer.from('opencode:'+env.OPENCODE_PASSWORD).toString('base64');
+import {liveConfig} from './helpers/live-config.mjs';
+const {endpoint,ca,pin,auth}=liveConfig();
+export {endpoint};
 export function options(method='GET') {
- return {method,agent:false,ca,headers:{Authorization:auth,Accept:'application/json'},checkServerIdentity:(host,cert)=>{
+ const result={method,agent:false,ca,rejectUnauthorized:true,headers:{Authorization:auth,Accept:'application/json'}};
+ if(pin)result.checkServerIdentity=(host,cert)=>{
   const error=tls.checkServerIdentity(host,cert);if(error)return error;
   const key=new X509Certificate(cert.raw).publicKey.export({type:'spki',format:'der'});
   return createHash('sha256').update(key).digest('base64')===pin?undefined:new Error('Server SPKI mismatch');
- }};
+ };
+ return result;
 }
 export function api(path,method='GET',body) {
  return new Promise((resolve,reject)=>{

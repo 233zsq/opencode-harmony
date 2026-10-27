@@ -28,12 +28,14 @@ server.env
 
 # Python test/compiler cache
 __pycache__/
-# Account runtime state is private; production state lives outside the checkout.
-/server/account/*.sqlite3
-/server/account/*.sqlite3-*
+# Cloud code and runtime state are maintained outside the client checkout.
+/server/
+*.sqlite3
+*.sqlite3-*
 
 # Local development notes; public build and attribution docs stay tracked.
 /docs/*.md
 !/docs/BUILDING.md
 !/docs/THIRD_PARTY.md
+!/docs/SERVER-API.md
 /ui-preview/

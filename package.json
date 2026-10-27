@@ -2,14 +2,13 @@
   "name": "opencode-harmony-checks",
   "version": "0.1.0-beta.3",
   "private": true,
-  "description": "Portable logic and web checks for OpenCode Harmony",
+  "description": "Portable client checks for OpenCode Harmony",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "test": "node scripts/test.mjs",
-    "test:web": "node tests/account-web.test.mjs"
+    "test": "node scripts/test.mjs"
   },
   "devDependencies": {
     "playwright": "1.62.1",

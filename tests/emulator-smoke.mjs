@@ -1,6 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {testEndpoint,liveCredentials} from './helpers/live-config.mjs';
+const mode = process.argv[2] || 'connect';
+if ((mode === 'live-send' || mode.startsWith('acceptance-')) && process.env.OPENCODE_ALLOW_MODEL_TEST !== '1') {
+  throw new Error('Set OPENCODE_ALLOW_MODEL_TEST=1 only after authorizing this model test');
+}
 const ide = process.env.DEVECO_STUDIO_HOME || 'C:/Program Files/Huawei/DevEco Studio';
 const hdc = resolve(ide, 'sdk/default/openharmony/toolchains/hdc.exe');
 const root = resolve(import.meta.dirname, '..');
@@ -47,7 +52,10 @@ async function screenshot(name) {
   command('shell', 'snapshot_display -f /data/local/tmp/opencode-smoke.jpeg');
   command('file', 'recv', '/data/local/tmp/opencode-smoke.jpeg', resolve(dir, name + '.jpeg'));
 }
-const mode = process.argv[2] || 'connect';
+async function credentialInput(query, value) {
+  try { await input(query, value); }
+  catch { throw new Error('Private credential entry failed; details suppressed.'); }
+}
 if (mode === 'connect') {
   await input('server-url', 'http://127.0.0.1:4210');
   await input('server-password', 'local-test');
@@ -113,15 +121,15 @@ else if (mode === 'files') {
   if (request?.input.model.id !== 'fixture-second') throw new Error('Native model switch failed');
   console.log('Native model selection verified.');
 } else if (mode === 'real') {
-  const privateEnv = readFileSync(resolve(root, '.server-access/server.env'), 'utf8');
-  const password = privateEnv.split(/\r?\n/).find(line => line.startsWith('OPENCODE_PASSWORD=')).slice(18);
+  const endpoint = testEndpoint();
+  const {username,password} = liveCredentials();
   await click('连接');
   for (let i = 0; i < 4 && !layout().some(n => n.id === 'server-url'); i++) {
     command('shell', 'uitest uiInput swipe 640 2000 640 1000 700'); await pause(300);
   }
-  await input('server-url', 'http://127.0.0.1:4211');
-  try { await input('server-password', password); } catch { throw new Error('Private credential entry failed; details suppressed.'); }
-  if (match('allow-http').item.checked !== 'true') await click('allow-http');
+  await input('server-url', endpoint);
+  await credentialInput('server-user', username);
+  await credentialInput('server-password', password);
   await click('connect-button'); await pause(1800);
   await click('demo'); await pause(800);
   await click('鸿蒙客户端真实接口联调'); await pause(1200);
@@ -132,8 +140,9 @@ else if (mode === 'files') {
 }
 
 else if (mode === 'real-resume') {
+  const endpoint = testEndpoint();
   const all = layout();
-  const start = all.findIndex(n => n.type === 'Text' && n.text === 'http://127.0.0.1:4211');
+  const start = all.findIndex(n => n.type === 'Text' && n.text === endpoint);
   const button = all.slice(start).find(n => n.type === 'Button' && n.text === '连接');
   if (start < 0 || !button) throw new Error('Saved real connection not found');
   const bounds = button.bounds.match(/\d+/g).map(Number);
@@ -158,10 +167,8 @@ else if (mode === 'real-resume') {
 }
 
 else if (mode === 'https' || mode === 'tls-negative') {
-  const endpoint = process.env.OPENCODE_TEST_URL;
-  if (!endpoint?.startsWith('https://')) throw new Error('Set OPENCODE_TEST_URL');
-  const privateEnv = readFileSync(resolve(root, '.server-access/server.env'), 'utf8');
-  const password = mode === 'tls-negative' ? 'test-only-invalid' : privateEnv.split(/\r?\n/).find(line => line.startsWith('OPENCODE_PASSWORD=')).slice(18);
+  const endpoint = testEndpoint();
+  const {username,password} = mode === 'tls-negative' ? {username:'fixture-user',password:'test-only-invalid'} : liveCredentials();
   if (!layout().some(n => n.id === 'server-url')) await click('连接');
   async function reveal(id) {
     for (let i=0;i<8;i++) {
@@ -173,8 +180,9 @@ else if (mode === 'https' || mode === 'tls-negative') {
     throw new Error('Control not visible: '+id);
   }
   await reveal('server-url'); await input('server-url',endpoint);
+  await reveal('server-user'); await credentialInput('server-user',username);
   await reveal('server-password');
-  try { await input('server-password',password); } catch { throw new Error('Private credential entry failed; details suppressed.'); }
+  await credentialInput('server-password',password);
   await reveal('dedicated-trust');
   const trust = mode !== 'tls-negative' || process.env.OPENCODE_EXPECT_TRUST !== 'false';
   if ((match('dedicated-trust').item.checked === 'true') !== trust) await click('dedicated-trust');
@@ -196,7 +204,7 @@ else if (mode === 'https' || mode === 'tls-negative') {
 }
 
 else if (mode === 'https-resume') {
-  const endpoint=process.env.OPENCODE_TEST_URL;if (!endpoint?.startsWith('https://')) throw new Error('Set OPENCODE_TEST_URL');
+  const endpoint=testEndpoint();
   if (!layout().some(n=>n.id==='server-url')) await click('连接');
   const screen=layout()[0].bounds.match(/\d+/g).map(Number);command('shell','uitest uiInput swipe '+Math.round(screen[2]/2)+' '+Math.round(screen[3]*.35)+' '+Math.round(screen[2]/2)+' '+Math.round(screen[3]*.75)+' 500');await pause(250);
   async function savedButton(url,label) {

@@ -34,7 +34,7 @@ powershell -File scripts/build.ps1 -Install -Launch
 
 应用需要已有的兼容 OpenCode v2.0.29 服务。模型、Agent 和工作目录均由该服务器提供，账号和密码以服务器管理员的配置为准。
 
-server/ 包含可选的登录、设置和流量统计扩展。scripts/ 中的部署迁移脚本绑定既有实例基线，不是通用安装器；连接兼容服务器不要求运行这些迁移脚本。
+账号服务、管理网站、设置与流量统计扩展及部署工具已独立维护，不随当前客户端源码分发。客户端构建不需要 Python、Flask、Nginx 或私人云端仓库权限；公开的[服务端兼容说明](SERVER-API.md)列出所需协议与可选扩展。
 
 ## 验证
 
@@ -47,17 +47,27 @@ npm test
 
 npm 锁定的 TypeScript 仅用于平台替身上的逻辑检查；未安装 npm 依赖时，单独执行 tests/*.test.mjs 仍可使用本机 DevEco SDK 转译器。真正的 ArkTS 编译、原生加密和设备布局需通过 DevEco 与设备另外验证。
 
-网页检查使用 Python 3.12、Flask 和 Playwright，从仓库模板自动生成隔离页面：
+Playwright 保留给客户端的浏览器 UI 替身检查。后台网页及服务端测试已移至独立云端仓库，本仓库不再提供 test:web 入口。测试输出写入被忽略的 .test/。
 
-~~~sh
-python -m pip install -r server/account/requirements.lock
-npx playwright install chromium
-npm run test:web
-~~~
+GitHub Actions 在所有 PR、main 提交和版本标签上运行 Windows/Linux 客户端逻辑回归。CI 不连接设备或真实服务，也不调用模型。模拟器脚本和真实服务脚本按各自前置条件单独运行，不能把逻辑回归当作 ArkTS 编译或设备验收。
 
-可通过 PYTHON_BINARY 指定 Python、EDGE_BINARY 指定已有浏览器。Windows 默认可复用本机 Edge，其他环境使用 Playwright 的 Chromium。测试输出自动写入被忽略的 .test/。
+## 显式运行真实服务检查
 
-GitHub Actions 在所有 PR、main 提交和版本标签上自动运行 Windows/Linux 逻辑回归、Linux Python/真实 Nginx 测试和网页浅深色检查。所有服务测试使用 loopback 与临时数据，不读取线上账号、签名或私有服务器配置。模拟器脚本和真实服务脚本需按各自前置条件单独运行。
+先在当前进程中安全注入以下变量；不要把凭据写进脚本、Git、URL、命令行参数或截图：
+
+| 变量 | 要求 |
+| --- | --- |
+| OPENCODE_TEST_URL | 明确的 HTTPS 基础地址，不含用户名、密码、查询或 fragment |
+| OPENCODE_TEST_USERNAME | 本次授权账号，不能省略或依赖旧默认用户名 |
+| OPENCODE_TEST_PASSWORD | 本次授权密码，仅保留在当前进程环境中 |
+| OPENCODE_TEST_CA_FILE | 可选；专用 CA 的显式文件路径，同时须设置 PIN |
+| OPENCODE_TEST_PIN | 可选；SHA-256 SPKI 的 base64 摘要，设置后同时检查主机名与公钥 |
+
+不设置 CA/PIN 时使用系统证书和主机名校验；脚本不会自动读取旧运维目录，也不会关闭 TLS 校验。恢复设备中已有连接的 real-resume / https-resume 模式仅需显式目标地址。emulator-smoke 的 HTTPS 连接模式会填写 server-user 和 server-password，真实设备流程仍需单独验收。
+
+`tests/attachments-live.mjs`、`tests/glob-live.test.mjs`，以及 emulator-smoke 的 live-send / acceptance-* 模式会触发模型或 Agent 工作，还须明确设置 OPENCODE_ALLOW_MODEL_TEST=1 并使用获授权的合成工作区。没有该开关时在发起这些工作前停止。
+
+`tests/wrong-tls-server.mjs` 是仅监听 loopback 的负向 TLS 替身。启动前显式设置 OPENCODE_TLS_FIXTURE_KEY_FILE 与 OPENCODE_TLS_FIXTURE_CERT_FILE，指向本次测试生成的错误证书和密钥；不读取生产证书或仓库中的默认路径。emulator-smoke 的 tls-negative 模式只提交固定的无效测试凭据。
 
 ## 新功能的模拟器检查
 
@@ -67,7 +77,7 @@ GitHub Actions 在所有 PR、main 提交和版本标签上自动运行 Windows/
 
 ## 文档范围
 
-公开文档保留本文件、第三方来源和根目录更新说明。实施计划、开发记录、服务器运维笔记及历史验收材料仅保存在开发者本地，不随当前源码包分发；既有 Git 历史保持不变。
+公开文档保留本文件、服务端兼容说明、第三方来源和根目录更新说明。实施计划、开发记录、服务器运维笔记及历史验收材料不随当前客户端源码包分发；既有公开 Git 历史保持不变。
 
 ## 常用提示词验收
 

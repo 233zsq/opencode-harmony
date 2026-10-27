@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
 import {api,scope,pause} from './live-api.mjs';
+assert.equal(process.env.OPENCODE_ALLOW_MODEL_TEST,'1','Set OPENCODE_ALLOW_MODEL_TEST=1 only after authorizing this controlled model test.');
 const directory=process.env.OPENCODE_GLOB_DIRECTORY;
 if(!directory?.startsWith('/')||!directory.endsWith('/workspaces/mobile-acceptance'))throw new Error('Set OPENCODE_GLOB_DIRECTORY to the owned synthetic acceptance repository');
 const query='?'+scope(directory);const session=(await api('/api/session','POST',{title:'glob 运行时回归',location:{directory}})).data;
